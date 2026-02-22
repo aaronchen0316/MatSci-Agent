@@ -1,0 +1,7 @@
+fastapi>=0.116.0
+uvicorn[standard]>=0.35.0
+pydantic>=2.9.0
+langgraph>=0.6.0
+mlflow>=2.16.0
+pytest>=8.3.0
+httpx>=0.28.0
