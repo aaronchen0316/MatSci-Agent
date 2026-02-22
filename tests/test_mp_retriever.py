@@ -1,0 +1,41 @@
+from matsci_agent.schemas import DiscoveryConstraints, MPRetrieverInput
+from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
+
+
+def test_mock_fallback_provenance_when_live_disabled():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+    payload = MPRetrieverInput(
+        research_goal="find alloys",
+        constraints=DiscoveryConstraints(top_k=2),
+    )
+
+    out = retriever.retrieve(payload)
+
+    assert out.provenance.output_summary["source"] == "mock_fallback"
+    assert out.provenance.output_summary["fallback_used"] is True
+    assert len(out.candidates) <= 4
+
+
+def test_mock_filter_banned_and_required_elements():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+    payload = MPRetrieverInput(
+        research_goal="find Al materials without Co",
+        constraints=DiscoveryConstraints(
+            banned_elements=["Co"],
+            required_elements=["Al"],
+            top_k=10,
+        ),
+    )
+
+    out = retriever.retrieve(payload)
+
+    assert out.candidates
+    for candidate in out.candidates:
+        elements = retriever._extract_elements(candidate.formula)
+        assert "co" not in elements
+        assert "al" in elements
+
+
+def test_formula_element_parser_distinguishes_c_and_co():
+    assert "co" in MPRetriever._extract_elements("CoTi")
+    assert "co" not in MPRetriever._extract_elements("SiC")

@@ -26,12 +26,20 @@ Production-style scaffold for an agentic materials discovery loop.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
+uv sync --extra dev
 ```
+
+## Optional: Enable Live Materials Project Retrieval
+```bash
+uv sync --extra dev --extra mp
+export MP_API_KEY="<your-key>"
+```
+
+Keep your key in env vars (or a local `.env` that is gitignored), not in source code.
 
 ## Run API
 ```bash
-uvicorn matsci_agent.api.main:app --app-dir src --reload
+uv run uvicorn matsci_agent.api.main:app --app-dir src --reload
 ```
 
 ## Example Request
@@ -48,14 +56,15 @@ curl -X POST http://127.0.0.1:8000/discover \
   }'
 ```
 
-## Run Example Script
+## Run Example Scripts
 ```bash
-python examples/run_discovery.py
+uv run python examples/run_discovery.py
+uv run python examples/run_mp_retrieval.py
 ```
 
 ## Run Tests
 ```bash
-pytest -q
+uv run pytest -q
 ```
 
 ## Docker
