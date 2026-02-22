@@ -59,8 +59,10 @@ class DiscoveryWorkflow:
         result = self.retriever.retrieve(payload)
         self.logger.log_step(
             "mp_retriever",
-            metrics={"candidate_count": len(result.candidates)},
-            params={"iteration": state["iteration"]},
+            metrics={
+                "candidate_count": len(result.candidates),
+                "iteration": float(state["iteration"]),
+            },
         )
         provenance = state.get("provenance", [])
         provenance.append(result.provenance.model_dump())
@@ -74,13 +76,16 @@ class DiscoveryWorkflow:
         payload = PropertyPredictorInput(
             candidates=[Candidate.model_validate(c) for c in candidates],
             goal=state["research_goal"],
+            surrogate_mode=state["constraints"].surrogate_mode,
         )
         result = self.predictor.run(payload)
         self.logger.log_step(
             "property_predictor",
-            metrics={"prediction_count": len(result.predictions)},
+            metrics={
+                "prediction_count": len(result.predictions),
+                "iteration": float(state["iteration"]),
+            },
             params={
-                "iteration": state["iteration"],
                 "backend": result.provenance.output_summary.get("backend", "unknown"),
             },
         )
@@ -131,8 +136,8 @@ class DiscoveryWorkflow:
             metrics={
                 "stable_count": sum(1 for r in ranked if r.stability.is_stable),
                 "ranked_count": len(ranked),
+                "iteration": float(state["iteration"]),
             },
-            params={"iteration": state["iteration"]},
         )
         provenance = state.get("provenance", [])
         provenance.append(result.provenance.model_dump())
@@ -152,8 +157,8 @@ class DiscoveryWorkflow:
         )
         self.logger.log_step(
             "refine",
-            params={
-                "iteration": iteration,
+            metrics={
+                "iteration": float(iteration),
                 "max_energy_above_hull": constraints.max_energy_above_hull,
             },
         )

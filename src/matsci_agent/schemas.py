@@ -12,6 +12,7 @@ class DiscoveryConstraints(BaseModel):
     min_thermal_conductivity: float | None = Field(default=None, ge=0)
     max_energy_above_hull: float = Field(default=0.1, ge=0)
     top_k: int = Field(default=5, ge=1, le=100)
+    surrogate_mode: Literal["fast", "accurate"] = "fast"
 
 
 class DiscoveryRequest(BaseModel):
@@ -77,6 +78,7 @@ class MPRetrieverOutput(BaseModel):
 class PropertyPredictorInput(BaseModel):
     candidates: list[Candidate]
     goal: str
+    surrogate_mode: Literal["fast", "accurate"] = "fast"
 
 
 class PropertyPredictionRecord(BaseModel):
