@@ -1,0 +1,11 @@
+TODO.md
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local runtime/dev artifacts
+mlflow.db
+.venv/
