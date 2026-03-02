@@ -1,7 +1,11 @@
 from fastapi import FastAPI
 
 from matsci_agent.config import settings
-from matsci_agent.schemas import DiscoveryRequest, DiscoveryResponse
+from matsci_agent.schemas import (
+    CandidateBandGapSummary,
+    DiscoveryRequest,
+    DiscoverySummaryResponse,
+)
 from matsci_agent.workflow.graph import DiscoveryWorkflow
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
@@ -13,6 +17,16 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/discover", response_model=DiscoveryResponse)
-def discover(payload: DiscoveryRequest) -> DiscoveryResponse:
-    return workflow.run(payload)
+@app.post("/discover", response_model=DiscoverySummaryResponse)
+def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
+    result = workflow.run(payload)
+    return DiscoverySummaryResponse(
+        candidates=[
+            CandidateBandGapSummary(
+                material_id=rc.candidate.material_id,
+                formula=rc.candidate.formula,
+                band_gap_ev=rc.predicted_properties.band_gap_ev,
+            )
+            for rc in result.candidates
+        ]
+    )

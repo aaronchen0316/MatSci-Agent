@@ -3,6 +3,7 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from matsci_agent.config import settings
+from matsci_agent.nlp.parser import merge_constraints, parse_goal_to_constraints
 from matsci_agent.observability.mlflow_logger import MLflowLogger
 from matsci_agent.schemas import (
     Candidate,
@@ -76,7 +77,11 @@ class DiscoveryWorkflow:
         payload = PropertyPredictorInput(
             candidates=[Candidate.model_validate(c) for c in candidates],
             goal=state["research_goal"],
-            surrogate_mode=state["constraints"].surrogate_mode,
+            calculate_matgl=state["constraints"].calculate_matgl,
+            matgl_max_recalc_entries=settings.matgl_max_recalc_entries,
+            matgl_max_atoms=settings.matgl_max_atoms,
+            enable_relaxation=settings.matgl_enable_relaxation,
+            relaxation_max_steps=settings.matgl_relaxation_max_steps,
         )
         result = self.predictor.run(payload)
         self.logger.log_step(
@@ -105,20 +110,23 @@ class DiscoveryWorkflow:
             constraints=state["constraints"],
         )
         result = self.stability_checker.run(payload)
-        min_tc = state["constraints"].min_thermal_conductivity
+        min_band_gap_ev = state["constraints"].min_band_gap_ev
 
         ranked: list[RankedCandidate] = []
         for rec in sorted(
-            result.records,
-            key=lambda x: (
-                not x.stability.is_stable,
-                -x.predicted.thermal_conductivity,
-                x.stability.energy_above_hull,
-            ),
+                result.records,
+                key=lambda x: (
+                    not x.stability.is_stable,
+                    -x.predicted.band_gap_ev,
+                    x.stability.energy_above_hull,
+                ),
         ):
-            if min_tc is not None and rec.predicted.thermal_conductivity < min_tc:
+            if (
+                min_band_gap_ev is not None
+                and rec.predicted.band_gap_ev < min_band_gap_ev
+            ):
                 continue
-            score = rec.predicted.thermal_conductivity - 100.0 * rec.stability.energy_above_hull
+            score = rec.predicted.band_gap_ev - 100.0 * rec.stability.energy_above_hull
             ranked.append(
                 RankedCandidate(
                     rank=len(ranked) + 1,
@@ -176,9 +184,15 @@ class DiscoveryWorkflow:
         return "retry"
 
     def run(self, request: DiscoveryRequest) -> DiscoveryResponse:
+        parsed = parse_goal_to_constraints(request.research_goal)
+        resolved_constraints = merge_constraints(
+            request.constraints,
+            parsed,
+            explicit_base_fields=set(request.constraints.model_fields_set),
+        )
         initial_state: DiscoveryState = {
             "research_goal": request.research_goal,
-            "constraints": request.constraints,
+            "constraints": resolved_constraints,
             "iteration": 1,
             "max_iterations": settings.max_iterations,
             "messages": [],

@@ -9,10 +9,10 @@ from pydantic import BaseModel, Field
 class DiscoveryConstraints(BaseModel):
     banned_elements: list[str] = Field(default_factory=list)
     required_elements: list[str] = Field(default_factory=list)
-    min_thermal_conductivity: float | None = Field(default=None, ge=0)
+    min_band_gap_ev: float | None = Field(default=None, ge=0)
+    calculate_matgl: bool = False
     max_energy_above_hull: float = Field(default=0.1, ge=0)
     top_k: int = Field(default=5, ge=1, le=100)
-    surrogate_mode: Literal["fast", "accurate"] = "fast"
 
 
 class DiscoveryRequest(BaseModel):
@@ -28,7 +28,7 @@ class Candidate(BaseModel):
 
 
 class PredictedProperties(BaseModel):
-    thermal_conductivity: float = Field(ge=0)
+    band_gap_ev: float = Field(ge=0)
     uncertainty: float = Field(ge=0)
     backend: str
 
@@ -59,6 +59,16 @@ class DiscoveryResponse(BaseModel):
     messages: list[str] = Field(default_factory=list)
 
 
+class CandidateBandGapSummary(BaseModel):
+    material_id: str
+    formula: str
+    band_gap_ev: float = Field(ge=0)
+
+
+class DiscoverySummaryResponse(BaseModel):
+    candidates: list[CandidateBandGapSummary] = Field(default_factory=list)
+
+
 class ToolCallProvenance(BaseModel):
     tool_name: str
     input_payload: dict[str, Any]
@@ -78,7 +88,11 @@ class MPRetrieverOutput(BaseModel):
 class PropertyPredictorInput(BaseModel):
     candidates: list[Candidate]
     goal: str
-    surrogate_mode: Literal["fast", "accurate"] = "fast"
+    calculate_matgl: bool = False
+    matgl_max_recalc_entries: int = Field(default=10, ge=1, le=100)
+    matgl_max_atoms: int = Field(default=50, ge=1, le=500)
+    enable_relaxation: bool = False
+    relaxation_max_steps: int = Field(default=200, ge=1, le=5000)
 
 
 class PropertyPredictionRecord(BaseModel):
