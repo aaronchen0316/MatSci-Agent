@@ -39,3 +39,14 @@ def test_mock_filter_banned_and_required_elements():
 def test_formula_element_parser_distinguishes_c_and_co():
     assert "co" in MPRetriever._extract_elements("CoTi")
     assert "co" not in MPRetriever._extract_elements("SiC")
+
+
+def test_semiconductor_goal_excludes_elemental_o2_in_mock_pool():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+    payload = MPRetrieverInput(
+        research_goal="Find semiconductor materials with no silicon and band gap higher than 1 eV",
+        constraints=DiscoveryConstraints(banned_elements=["Si"], min_band_gap_ev=1.0, top_k=10),
+    )
+    out = retriever.retrieve(payload)
+    formulas = {c.formula for c in out.candidates}
+    assert "O2" not in formulas
