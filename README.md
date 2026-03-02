@@ -4,9 +4,9 @@ Production-style scaffold for an agentic materials discovery loop.
 
 ## Features
 - Strict Pydantic schemas for API and tool contracts
-- Tool interfaces with mock backends:
-  - `mp_retriever` (Materials Project stub)
-  - `property_predictor` (pluggable backend, mock default)
+- Tool interfaces with MP-first and MatGL-aware prediction:
+  - `mp_retriever` (live Materials Project + mock fallback)
+  - `property_predictor` (MP band gap -> MatGL -> torch-hub -> heuristic fallback)
   - `stability_checker` (mock e-above-hull)
 - LangGraph workflow with retry/refine loop when stability fails
 - FastAPI endpoint: `POST /discover`
@@ -37,6 +37,16 @@ export MP_API_KEY="<your-key>"
 
 Keep your key in env vars (or a local `.env` that is gitignored), not in source code.
 
+## Optional: Enable MatGL Band-Gap Prediction
+```bash
+uv sync --extra dev --extra matgl
+```
+
+Optional runtime env vars:
+- `MATSCI_MATGL_MODEL`: exact MatGL band-gap model name to load
+- `MATSCI_MATGL_MODEL_CANDIDATES`: comma-separated fallback model names
+- `MATSCI_MATGL_RELAX_MODEL`: model used by optional relaxation path
+
 ## Run API
 ```bash
 uv run uvicorn matsci_agent.api.main:app --app-dir src --reload
@@ -47,9 +57,10 @@ uv run uvicorn matsci_agent.api.main:app --app-dir src --reload
 curl -X POST http://127.0.0.1:8000/discover \
   -H "Content-Type: application/json" \
   -d '{
-    "research_goal": "Find a stable alloy with high thermal conductivity that does not use Cobalt",
+    "research_goal": "Find semiconductor materials with no Si and band gap higher than 2 eV",
     "constraints": {
-      "banned_elements": ["Co"],
+      "banned_elements": ["Si"],
+      "min_band_gap_ev": 2.0,
       "max_energy_above_hull": 0.08,
       "top_k": 5
     }
@@ -74,8 +85,6 @@ docker run --rm -p 8000:8000 matsci-agent:local
 ```
 
 ## TODOs for Real Integrations
-- Replace `MPRetriever.retrieve` mock with authenticated Materials Project API calls.
-- Replace `MockCompositionBackend` with CrabNet/Roost inference service.
-- Add stage-2 structure model refinement using CHGNet/M3GNet/ALIGNN.
+- Improve model-specific MatGL adapters for graph conversion edge cases.
 - Add calibrated uncertainty + DFT triage queue.
 - Enrich provenance with exact MP query IDs and model artifact versions.
