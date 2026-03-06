@@ -16,9 +16,11 @@ _M3GNET_MODEL: Any | None = None
 _M3GNET_LOAD_ERROR: str | None = None
 _MATGL_MODEL: Any | None = None
 _MATGL_MODEL_NAME: str = ""
+_MATGL_MODEL_SOURCE: str = ""
 _MATGL_LOAD_ERROR: str | None = None
 _MATGL_RELAXER: Any | None = None
 _MATGL_RELAXER_ERROR: str | None = None
+_DEFAULT_BANDGAP_MODEL = "MEGNet-MP-2019.4.1-BandGap-mfi"
 
 
 def _heuristic_fallback(formula: str, goal: str, reason: str) -> PredictedProperties:
@@ -91,20 +93,11 @@ def _estimate_band_gap_ev_from_model_output(model_output: Any) -> float:
 
 def _matgl_model_candidates() -> list[str]:
     candidates: list[str] = []
-    direct = os.getenv("MATSCI_MATGL_MODEL", "").strip()
-    if direct:
-        candidates.append(direct)
+    direct = os.getenv("MATSCI_MATGL_MODEL", _DEFAULT_BANDGAP_MODEL).strip()
+    candidates.append(direct or _DEFAULT_BANDGAP_MODEL)
     extra = os.getenv("MATSCI_MATGL_MODEL_CANDIDATES", "").strip()
     if extra:
         candidates.extend([token.strip() for token in extra.split(",") if token.strip()])
-    # Known/likely names across MatGL model registries.
-    candidates.extend(
-        [
-            "MEGNet-MP-2018.6.1-BandGap-mfi",
-            "MEGNet-MP-2019.4.1-BandGap-mfi",
-            "band_gap",
-        ]
-    )
     dedup: list[str] = []
     seen: set[str] = set()
     for name in candidates:
@@ -114,30 +107,97 @@ def _matgl_model_candidates() -> list[str]:
     return dedup
 
 
+def _load_model_from_torch_hub(model_name: str) -> tuple[Any | None, str | None]:
+    try:
+        import torch
+    except Exception as exc:
+        return None, f"torch_import_failed:{exc}"
+
+    try:
+        model = torch.hub.load("materialsvirtuallab/matgl", model_name)
+        return model, None
+    except Exception as exc:
+        return None, f"torch_hub_load_failed:{exc}"
+
+
 def _load_matgl_bandgap_model() -> tuple[Any | None, str, str | None]:
-    global _MATGL_MODEL, _MATGL_MODEL_NAME, _MATGL_LOAD_ERROR
+    global _MATGL_MODEL, _MATGL_MODEL_NAME, _MATGL_MODEL_SOURCE, _MATGL_LOAD_ERROR
     if _MATGL_MODEL is not None:
         return _MATGL_MODEL, _MATGL_MODEL_NAME, None
     if _MATGL_LOAD_ERROR is not None:
         return None, "", _MATGL_LOAD_ERROR
 
+    errors: list[str] = []
+    for candidate_name in _matgl_model_candidates():
+        model, torch_err = _load_model_from_torch_hub(candidate_name)
+        if model is not None:
+            _MATGL_MODEL = model
+            _MATGL_MODEL_NAME = candidate_name
+            _MATGL_MODEL_SOURCE = "torch_hub"
+            return _MATGL_MODEL, _MATGL_MODEL_NAME, None
+        if torch_err:
+            errors.append(f"{candidate_name}:{torch_err}")
+
     try:
         import matgl
     except Exception as exc:
-        _MATGL_LOAD_ERROR = f"matgl_import_failed:{exc}"
+        _MATGL_LOAD_ERROR = f"matgl_import_failed:{exc}; {'; '.join(errors)}"
         return None, "", _MATGL_LOAD_ERROR
 
-    errors: list[str] = []
     for candidate_name in _matgl_model_candidates():
         try:
+            if candidate_name.startswith("MEGNet-"):
+                try:
+                    matgl.set_backend("DGL")
+                except Exception as exc:
+                    errors.append(f"{candidate_name}:set_backend_failed:{exc}")
+                    continue
             _MATGL_MODEL = matgl.load_model(candidate_name)
             _MATGL_MODEL_NAME = candidate_name
+            _MATGL_MODEL_SOURCE = "matgl_load_model"
             return _MATGL_MODEL, _MATGL_MODEL_NAME, None
         except Exception as exc:
             errors.append(f"{candidate_name}:{exc}")
 
     _MATGL_LOAD_ERROR = "; ".join(errors) if errors else "matgl_model_not_found"
     return None, "", _MATGL_LOAD_ERROR
+
+
+def _predict_with_matgl_compat(model: Any, structure: Any) -> tuple[float | None, str | None]:
+    """Compatibility fallback for older MEGNet checkpoints on newer MatGL runtimes."""
+    try:
+        import torch
+    except Exception as exc:
+        return None, f"matgl_compat_torch_import_failed:{exc}"
+
+    base_model = model.model if hasattr(model, "model") else model
+    element_types = getattr(base_model, "element_types", None)
+    cutoff = getattr(base_model, "cutoff", None)
+    if element_types is None or cutoff is None:
+        return None, "matgl_compat_missing_model_graph_params"
+
+    try:
+        from matgl.ext._pymatgen_dgl import Structure2Graph
+    except Exception as exc:
+        return None, f"matgl_compat_graph_converter_import_failed:{exc}"
+
+    try:
+        graph_converter = Structure2Graph(element_types=element_types, cutoff=cutoff)
+        graph, lattice, _state_attr_default = graph_converter.get_graph(structure)
+        if "node_type" in graph.ndata:
+            graph.ndata["node_type"] = graph.ndata["node_type"].long()
+        if "pbc_offset" in graph.edata:
+            graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lattice[0])
+        if "frac_coords" in graph.ndata:
+            graph.ndata["pos"] = graph.ndata["frac_coords"] @ lattice[0]
+        output = model(g=graph, state_attr=torch.tensor([0], dtype=torch.long))
+    except Exception as exc:
+        return None, f"matgl_compat_predict_failed:{exc}"
+
+    parsed = _extract_band_gap_ev(output)
+    if parsed is None:
+        return None, "matgl_compat_output_missing_band_gap"
+    return parsed, None
 
 
 def _predict_with_matgl_model(structure: Any) -> tuple[float | None, str | None]:
@@ -161,6 +221,11 @@ def _predict_with_matgl_model(structure: Any) -> tuple[float | None, str | None]
         else:
             return None, "matgl_model_has_no_predict_interface"
     except Exception as exc:
+        compat_prediction, compat_error = _predict_with_matgl_compat(model, structure)
+        if compat_prediction is not None:
+            return compat_prediction, None
+        if compat_error:
+            return None, f"matgl_predict_failed:{exc}; {compat_error}"
         return None, f"matgl_predict_failed:{exc}"
 
     parsed = _extract_band_gap_ev(output)
@@ -299,10 +364,15 @@ def structure_predict_m3gnet(
 
     matgl_gap_ev, matgl_err = _predict_with_matgl_model(structure)
     if matgl_gap_ev is not None:
+        backend = "matgl_band_gap"
+        if _MATGL_MODEL_NAME:
+            backend = f"{backend}:{_MATGL_MODEL_NAME}"
+        if _MATGL_MODEL_SOURCE:
+            backend = f"{backend}:{_MATGL_MODEL_SOURCE}"
         return PredictedProperties(
             band_gap_ev=matgl_gap_ev,
             uncertainty=1.0 if was_relaxed else 1.2,
-            backend="matgl_band_gap_relaxed" if was_relaxed else "matgl_band_gap",
+            backend=f"{backend}_relaxed" if was_relaxed else backend,
         )
 
     model, load_error = _load_m3gnet_model()

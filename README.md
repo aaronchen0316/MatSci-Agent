@@ -24,7 +24,8 @@ Production-style scaffold for an agentic materials discovery loop.
 
 ## Setup
 ```bash
-python -m venv .venv
+uv python install 3.12
+uv venv --python 3.12 .venv
 source .venv/bin/activate
 uv sync --extra dev
 ```
@@ -43,9 +44,13 @@ uv sync --extra dev --extra matgl
 ```
 
 Optional runtime env vars:
-- `MATSCI_MATGL_MODEL`: exact MatGL band-gap model name to load
+- `MATSCI_MATGL_MODEL`: exact MatGL band-gap model name to load (default: `MEGNet-MP-2019.4.1-BandGap-mfi`)
 - `MATSCI_MATGL_MODEL_CANDIDATES`: comma-separated fallback model names
 - `MATSCI_MATGL_RELAX_MODEL`: model used by optional relaxation path
+
+Note:
+- `MEGNet-MP-2019.4.1-BandGap-mfi` is DGL-backed, so Python `3.12` is the recommended runtime.
+- This scaffold includes a compatibility inference path for this legacy MEGNet checkpoint on modern MatGL runtimes.
 
 ## Run API
 ```bash

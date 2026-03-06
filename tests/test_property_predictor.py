@@ -1,4 +1,5 @@
 from matsci_agent.schemas import Candidate, PropertyPredictorInput
+from matsci_agent.tools import property_predictor as predictor_module
 from matsci_agent.tools.property_predictor import PropertyPredictor
 
 
@@ -63,3 +64,24 @@ def test_predictor_forced_matgl_applies_deterministic_limits_and_provenance_tags
     assert by_id["mp-20"].candidate.features["band_gap_source"] == "materials_project"
     assert by_id["mp-1"].candidate.features["matgl_skipped_reason"] == "atoms_too_high_or_missing_nsites"
     assert by_id["mp-1"].candidate.features["band_gap_source"] == "fallback"
+
+
+def test_predict_with_matgl_model_uses_compat_when_primary_path_fails(monkeypatch):
+    class BrokenModel:
+        def predict_structure(self, _structure):
+            raise RuntimeError("primary path failed")
+
+    monkeypatch.setattr(
+        predictor_module,
+        "_load_matgl_bandgap_model",
+        lambda: (BrokenModel(), "MEGNet-MP-2019.4.1-BandGap-mfi", None),
+    )
+    monkeypatch.setattr(
+        predictor_module,
+        "_predict_with_matgl_compat",
+        lambda _model, _structure: (2.35, None),
+    )
+
+    band_gap_ev, err = predictor_module._predict_with_matgl_model(structure={})
+    assert err is None
+    assert band_gap_ev == 2.35
