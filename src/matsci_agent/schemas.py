@@ -85,6 +85,8 @@ class StabilityResult(BaseModel):
     energy_above_hull: float
     is_stable: bool
     method: str
+    source: Literal["materials_project", "local_fallback"] = "local_fallback"
+    used_relaxation: bool = False
 
 
 class RankedCandidate(BaseModel):
@@ -132,10 +134,41 @@ class DiscoverySummaryResponse(BaseModel):
 class MPRetrieverInput(BaseModel):
     research_goal: str
     constraints: DiscoveryConstraints
+    exclude_material_ids: list[str] = Field(default_factory=list)
+    limit_override: int | None = Field(default=None, ge=1, le=500)
 
 
 class MPRetrieverOutput(BaseModel):
     candidates: list[Candidate]
+    provenance: ToolCallProvenance
+
+
+class PolicyFilterInput(BaseModel):
+    candidates: list[Candidate]
+    discovery_plan: DiscoveryPlan
+
+
+class PolicyFilterDecisionPayload(BaseModel):
+    material_id: str
+    keep: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class PolicyFilterBatchResponse(BaseModel):
+    policy_name: str
+    decisions: list[PolicyFilterDecisionPayload] = Field(default_factory=list)
+
+
+class PolicyFilterRecord(BaseModel):
+    candidate: Candidate
+    passed: bool
+    reasons: list[str] = Field(default_factory=list)
+    policy: str
+
+
+class PolicyFilterOutput(BaseModel):
+    filtered_candidates: list[Candidate]
+    records: list[PolicyFilterRecord]
     provenance: ToolCallProvenance
 
 
@@ -174,3 +207,22 @@ class StabilityRecord(BaseModel):
 class StabilityCheckerOutput(BaseModel):
     records: list[StabilityRecord]
     provenance: ToolCallProvenance
+
+
+class BandGapBenchmarkMetrics(BaseModel):
+    sample_size: int = 0
+    mae: float | None = None
+    rmse: float | None = None
+    rank_correlation: float | None = None
+    failure_count: int = 0
+    skipped_count: int = 0
+    mp_passthrough_count: int = 0
+    matgl_count: int = 0
+    fallback_count: int = 0
+
+
+class BandGapBenchmarkArtifact(BaseModel):
+    mode: Literal["small", "full"]
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    metrics: BandGapBenchmarkMetrics
+    rows: list[dict[str, Any]] = Field(default_factory=list)

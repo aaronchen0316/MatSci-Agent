@@ -52,7 +52,10 @@ class MPRetriever:
 
         banned = {el.lower() for el in payload.constraints.banned_elements}
         required = {el.lower() for el in payload.constraints.required_elements}
-        limit = payload.constraints.top_k * self.config.request_limit_multiplier
+        limit = payload.limit_override or (
+            payload.constraints.top_k * self.config.request_limit_multiplier
+        )
+        excluded_ids = set(payload.exclude_material_ids)
         goal_lower = payload.research_goal.lower()
         is_semiconductor_goal = "semiconductor" in goal_lower
         band_gap_min = payload.constraints.min_band_gap_ev
@@ -68,6 +71,7 @@ class MPRetriever:
                 "formula_pretty",
                 "elements",
                 "band_gap",
+                "energy_above_hull",
                 "nsites",
                 "structure",
             ],
@@ -94,10 +98,13 @@ class MPRetriever:
         candidates: list[Candidate] = []
         for doc in docs:
             material_id = str(doc.material_id)
+            if material_id in excluded_ids:
+                continue
             formula = str(doc.formula_pretty)
             doc_elements = {str(e).lower() for e in getattr(doc, "elements", [])}
             elements = doc_elements or self._extract_elements(formula)
             mp_band_gap_ev = getattr(doc, "band_gap", None)
+            mp_energy_above_hull = getattr(doc, "energy_above_hull", None)
             nsites = getattr(doc, "nsites", None)
             if elements & banned:
                 continue
@@ -118,6 +125,7 @@ class MPRetriever:
                     features={
                         "elements": [str(e) for e in getattr(doc, "elements", [])],
                         "mp_band_gap_ev": mp_band_gap_ev,
+                        "mp_energy_above_hull": mp_energy_above_hull,
                         "nsites": nsites,
                         "structure": (
                             doc.structure.as_dict()
@@ -155,57 +163,68 @@ class MPRetriever:
                 material_id="mp-mock-001",
                 formula="Al3Mg2",
                 source="mock",
-                features={"mp_band_gap_ev": 0.1, "nsites": 20},
+                features={"mp_band_gap_ev": 0.1, "mp_energy_above_hull": 0.12, "nsites": 20},
             ),
             Candidate(
                 material_id="mp-mock-002",
                 formula="CuZn",
                 source="mock",
-                features={"mp_band_gap_ev": 0.0, "nsites": 2},
+                features={"mp_band_gap_ev": 0.0, "mp_energy_above_hull": 0.06, "nsites": 2},
             ),
             Candidate(
                 material_id="mp-mock-003",
                 formula="AlN",
                 source="mock",
-                features={"mp_band_gap_ev": 5.9, "nsites": 8},
+                features={"mp_band_gap_ev": 5.9, "mp_energy_above_hull": 0.01, "nsites": 8},
             ),
             Candidate(
                 material_id="mp-mock-004",
                 formula="SiC",
                 source="mock",
-                features={"mp_band_gap_ev": 2.4, "nsites": 8},
+                features={"mp_band_gap_ev": 2.4, "mp_energy_above_hull": 0.02, "nsites": 8},
             ),
             Candidate(
                 material_id="mp-mock-005",
                 formula="Fe2VAl",
                 source="mock",
-                features={"mp_band_gap_ev": None, "nsites": 12},
+                features={"mp_band_gap_ev": None, "mp_energy_above_hull": None, "nsites": 12},
             ),
             Candidate(
                 material_id="mp-mock-006",
                 formula="Ni3Al",
                 source="mock",
-                features={"mp_band_gap_ev": None, "nsites": 54},
+                features={"mp_band_gap_ev": None, "mp_energy_above_hull": None, "nsites": 54},
             ),
             Candidate(
                 material_id="mp-mock-007",
                 formula="CoTi",
                 source="mock",
-                features={"mp_band_gap_ev": 1.0, "nsites": 4},
+                features={"mp_band_gap_ev": 1.0, "mp_energy_above_hull": 0.03, "nsites": 4},
             ),
             Candidate(
                 material_id="mp-mock-008",
                 formula="O2",
                 source="mock",
-                features={"mp_band_gap_ev": 1.3, "nsites": 2},
+                features={"mp_band_gap_ev": 1.3, "mp_energy_above_hull": 0.00, "nsites": 2},
+            ),
+            Candidate(
+                material_id="mp-mock-009",
+                formula="AcF3",
+                source="mock",
+                features={"mp_band_gap_ev": 6.2, "mp_energy_above_hull": 0.02, "nsites": 16},
             ),
         ]
 
         banned = {el.lower() for el in payload.constraints.banned_elements}
         required = {el.lower() for el in payload.constraints.required_elements}
+        excluded_ids = set(payload.exclude_material_ids)
+        limit = payload.limit_override or (
+            payload.constraints.top_k * self.config.request_limit_multiplier
+        )
         filtered = [
             c
             for c in mock_pool
+            if c.material_id not in excluded_ids
             if not (self._extract_elements(c.formula) & banned)
             and required.issubset(self._extract_elements(c.formula))
             and self._passes_goal_semantics(
@@ -214,7 +233,7 @@ class MPRetriever:
                 mp_band_gap_ev=c.features.get("mp_band_gap_ev"),
                 min_band_gap_ev=payload.constraints.min_band_gap_ev,
             )
-        ][: payload.constraints.top_k * self.config.request_limit_multiplier]
+        ][:limit]
 
         provenance = ToolCallProvenance(
             tool_name="mp_retriever",

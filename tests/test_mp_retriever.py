@@ -50,3 +50,29 @@ def test_semiconductor_goal_excludes_elemental_o2_in_mock_pool():
     out = retriever.retrieve(payload)
     formulas = {c.formula for c in out.candidates}
     assert "O2" not in formulas
+
+
+def test_mock_candidates_include_energy_above_hull_feature():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+    payload = MPRetrieverInput(
+        research_goal="Find semiconductors",
+        constraints=DiscoveryConstraints(top_k=3),
+    )
+    out = retriever.retrieve(payload)
+    assert out.candidates
+    assert "mp_energy_above_hull" in out.candidates[0].features
+
+
+def test_mock_retriever_honors_excluded_material_ids_and_limit_override():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+    payload = MPRetrieverInput(
+        research_goal="Find semiconductors",
+        constraints=DiscoveryConstraints(top_k=5),
+        exclude_material_ids=["mp-mock-003", "mp-mock-004"],
+        limit_override=2,
+    )
+    out = retriever.retrieve(payload)
+    ids = [candidate.material_id for candidate in out.candidates]
+    assert len(ids) == 2
+    assert "mp-mock-003" not in ids
+    assert "mp-mock-004" not in ids
