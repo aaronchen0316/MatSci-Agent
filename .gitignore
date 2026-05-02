@@ -10,3 +10,4 @@ __pycache__/
 mlflow.db
 .venv/
 .DS_Store
+output.log

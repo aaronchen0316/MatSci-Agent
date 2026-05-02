@@ -14,7 +14,7 @@ from matsci_agent.schemas import (
     DiscoveryResponse,
     DiscoveryPlan,
     MPRetrieverInput,
-    PredictedProperties,
+    PolicyFilterInput,
     PropertyPredictorInput,
     PropertyPredictionRecord,
     RankedCandidate,
@@ -23,6 +23,7 @@ from matsci_agent.schemas import (
     ToolCallProvenance,
 )
 from matsci_agent.tools.mp_retriever import MPRetriever
+from matsci_agent.tools.policy_filter import PolicyFilter, PolicyFilterError
 from matsci_agent.tools.property_predictor import PropertyPredictor
 from matsci_agent.tools.stability_checker import StabilityChecker
 from matsci_agent.workflow.state import DiscoveryState
@@ -33,6 +34,7 @@ class DiscoveryWorkflow:
         self,
         retriever: MPRetriever | None = None,
         predictor: PropertyPredictor | None = None,
+        policy_filter: PolicyFilter | None = None,
         stability_checker: StabilityChecker | None = None,
         logger: MLflowLogger | None = None,
         intent_agent: ChemistryIntentAgent | None = None,
@@ -41,6 +43,7 @@ class DiscoveryWorkflow:
     ) -> None:
         self.retriever = retriever or MPRetriever()
         self.predictor = predictor or PropertyPredictor()
+        self.policy_filter = policy_filter or PolicyFilter()
         self.stability_checker = stability_checker or StabilityChecker()
         self.logger = logger or MLflowLogger(settings.mlflow_experiment)
         self.intent_agent = intent_agent or ChemistryIntentAgent()
@@ -53,6 +56,7 @@ class DiscoveryWorkflow:
         workflow.add_node("plan_intent", self._plan_intent)
         workflow.add_node("assess_capability", self._assess_capability)
         workflow.add_node("retrieve", self._retrieve)
+        workflow.add_node("policy_filter", self._policy_filter)
         workflow.add_node("predict", self._predict)
         workflow.add_node("check_stability", self._check_stability)
         workflow.add_node("refine", self._refine)
@@ -64,7 +68,12 @@ class DiscoveryWorkflow:
             self._route_after_capability,
             {"continue": "retrieve", "unsupported": "report"},
         )
-        workflow.add_edge("retrieve", "predict")
+        workflow.add_edge("retrieve", "policy_filter")
+        workflow.add_conditional_edges(
+            "policy_filter",
+            self._route_after_policy_filter,
+            {"continue": "predict", "stop": "report"},
+        )
         workflow.add_edge("predict", "check_stability")
         workflow.add_conditional_edges(
             "check_stability",
@@ -162,8 +171,116 @@ class DiscoveryWorkflow:
             "provenance": provenance,
         }
 
+    def _policy_filter(self, state: DiscoveryState) -> DiscoveryState:
+        all_candidates = [Candidate.model_validate(c) for c in state.get("raw_candidates", [])]
+        plan = state["discovery_plan"]
+        if plan.task_class != "band_gap_screening":
+            result = self.policy_filter.run(
+                PolicyFilterInput(candidates=all_candidates, discovery_plan=plan)
+            )
+            provenance = state.get("provenance", [])
+            provenance.append(result.provenance.model_dump())
+            return {
+                "filtered_candidates": [c.model_dump() for c in result.filtered_candidates],
+                "filter_records": [r.model_dump() for r in result.records],
+                "provenance": provenance,
+                "filter_replenish_attempts": 0,
+            }
+
+        provenance = state.get("provenance", [])
+        messages = state.get("messages", [])
+        selected = self._select_filter_candidates(all_candidates, limit=10)
+        try:
+            first_result = self.policy_filter.run(
+                PolicyFilterInput(candidates=selected, discovery_plan=plan)
+            )
+        except PolicyFilterError as exc:
+            return self._policy_filter_failed_state(
+                state,
+                batch_size=len(selected),
+                replenish_attempts=0,
+                error=exc,
+            )
+
+        accepted = list(first_result.filtered_candidates)
+        records = list(first_result.records)
+        seen_ids = {candidate.material_id for candidate in selected}
+        replenish_attempts = 0
+
+        if len(accepted) < state["constraints"].top_k:
+            replenish_attempts = 1
+            deficit = state["constraints"].top_k - len(accepted)
+            refill = self.retriever.retrieve(
+                MPRetrieverInput(
+                    research_goal=state["research_goal"],
+                    constraints=state["constraints"],
+                    exclude_material_ids=sorted(seen_ids),
+                    limit_override=max(10, deficit),
+                )
+            )
+            refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
+            refill_selected = self._select_filter_candidates(refill_candidates, limit=10)
+            if refill_selected:
+                try:
+                    second_result = self.policy_filter.run(
+                        PolicyFilterInput(candidates=refill_selected, discovery_plan=plan)
+                    )
+                except PolicyFilterError as exc:
+                    return self._policy_filter_failed_state(
+                        state,
+                        batch_size=len(refill_selected),
+                        replenish_attempts=1,
+                        error=exc,
+                    )
+                accepted.extend(second_result.filtered_candidates)
+                records.extend(second_result.records)
+                provenance.append(
+                    ToolCallProvenance(
+                        tool_name="mp_retriever_replenish",
+                        input_payload={
+                            "research_goal": state["research_goal"],
+                            "exclude_material_ids": sorted(seen_ids),
+                            "limit_override": max(10, deficit),
+                        },
+                        output_summary={
+                            "candidate_count": len(refill_candidates),
+                        },
+                    ).model_dump()
+                )
+                provenance.append(second_result.provenance.model_dump())
+
+        self.logger.log_step(
+            "policy_filter",
+            metrics={
+                "input_count": float(len(selected)),
+                "filtered_count": float(len(accepted)),
+                "excluded_count": float(len(records) - len(accepted)),
+                "iteration": float(state["iteration"]),
+            },
+            params={"policy": first_result.provenance.output_summary.get("policy", "unknown")},
+        )
+        provenance.append(first_result.provenance.model_dump())
+        excluded_count = len(records) - len(accepted)
+        if excluded_count:
+            messages.append(
+                f"Policy filter excluded {excluded_count} candidate(s) using {first_result.provenance.output_summary.get('policy', 'unknown')}."
+            )
+        if replenish_attempts:
+            messages.append("Policy filter ran one replenish pass to fill requested candidate count.")
+        next_state: DiscoveryState = {
+            "filtered_candidates": [c.model_dump() for c in accepted],
+            "filter_records": [r.model_dump() for r in records],
+            "messages": messages,
+            "provenance": provenance,
+            "filter_replenish_attempts": replenish_attempts,
+        }
+        if not accepted:
+            messages.append("Chemistry filter kept zero candidates for this request.")
+            next_state["status"] = "partial"
+        return next_state
+
     def _predict(self, state: DiscoveryState) -> DiscoveryState:
-        candidates = state.get("raw_candidates", [])
+        candidates = state.get("filtered_candidates", state.get("raw_candidates", []))
         plan = state.get("discovery_plan")
         if isinstance(plan, DiscoveryPlan):
             policy = plan.execution_policy
@@ -305,16 +422,25 @@ class DiscoveryWorkflow:
             supported=True
         )
         ranked = state.get("ranked_candidates", [])
-        report = self.reporting_agent.report(
-            plan=plan,
-            capability=capability,
-            ranked_candidates=ranked,
-            iteration=state.get("iteration", 1),
-        )
-
+        preset_status = state.get("status")
         if not capability.supported:
+            report = self.reporting_agent.report(
+                plan=plan,
+                capability=capability,
+                ranked_candidates=ranked,
+                iteration=state.get("iteration", 1),
+            )
             status = "unsupported"
+        elif preset_status in {"failed", "partial"} and not ranked:
+            report = self._make_preexecution_report(state, preset_status)
+            status = preset_status
         else:
+            report = self.reporting_agent.report(
+                plan=plan,
+                capability=capability,
+                ranked_candidates=ranked,
+                iteration=state.get("iteration", 1),
+            )
             has_stable = any(r.stability.is_stable for r in ranked)
             status = "success" if has_stable else "partial" if ranked else "failed"
 
@@ -351,6 +477,11 @@ class DiscoveryWorkflow:
         capability = state.get("capability_assessment")
         if capability is not None and not capability.supported:
             return "unsupported"
+        return "continue"
+
+    def _route_after_policy_filter(self, state: DiscoveryState) -> str:
+        if state.get("status") in {"failed", "partial"} and not state.get("filtered_candidates"):
+            return "stop"
         return "continue"
 
     def _route_after_stability(self, state: DiscoveryState) -> str:
@@ -390,4 +521,90 @@ class DiscoveryWorkflow:
             discovery_plan=final_state.get("discovery_plan"),
             capability_assessment=final_state.get("capability_assessment"),
             report_summary=final_state.get("report_summary"),
+        )
+
+    @staticmethod
+    def _cheap_candidate_sort_key(candidate: Candidate) -> tuple[float, float, int, str]:
+        mp_gap = candidate.features.get("mp_band_gap_ev")
+        mp_hull = candidate.features.get("mp_energy_above_hull")
+        completeness = sum(
+            1
+            for key in ("elements", "mp_band_gap_ev", "mp_energy_above_hull", "nsites", "structure")
+            if candidate.features.get(key) is not None
+        )
+        return (
+            -(float(mp_gap) if isinstance(mp_gap, (int, float)) else -1.0),
+            float(mp_hull) if isinstance(mp_hull, (int, float)) else 999.0,
+            -completeness,
+            candidate.material_id,
+        )
+
+    def _select_filter_candidates(self, candidates: list[Candidate], limit: int) -> list[Candidate]:
+        return sorted(candidates, key=self._cheap_candidate_sort_key)[:limit]
+
+    def _policy_filter_failed_state(
+        self,
+        state: DiscoveryState,
+        batch_size: int,
+        replenish_attempts: int,
+        error: PolicyFilterError,
+    ) -> DiscoveryState:
+        messages = state.get("messages", [])
+        messages.append(f"Chemistry filter failed: {error.message}")
+        provenance = state.get("provenance", [])
+        provenance.append(
+            ToolCallProvenance(
+                tool_name="policy_filter",
+                input_payload={
+                    "task_class": state["discovery_plan"].task_class,
+                    "batch_size": batch_size,
+                },
+                output_summary={
+                    "provider": self.policy_filter.provider,
+                    "model": self.policy_filter.model,
+                    "failure_code": error.code,
+                    "raw_response_preview": error.raw_response_preview,
+                    "replenish_attempts": replenish_attempts,
+                },
+            ).model_dump()
+        )
+        self.logger.log_step(
+            "policy_filter",
+            metrics={
+                "input_count": float(batch_size),
+                "filtered_count": 0.0,
+                "excluded_count": 0.0,
+                "iteration": float(state["iteration"]),
+            },
+            params={
+                "policy": "llm",
+                "failure_code": error.code,
+            },
+        )
+        return {
+            "filtered_candidates": [],
+            "filter_records": [],
+            "messages": messages,
+            "provenance": provenance,
+            "status": "failed",
+            "filter_replenish_attempts": replenish_attempts,
+        }
+
+    @staticmethod
+    def _make_preexecution_report(state: DiscoveryState, status: str) -> ReportSummary:
+        if status == "failed":
+            message = (
+                state.get("messages", [])[-1]
+                if state.get("messages")
+                else "Execution failed before prediction."
+            )
+            return ReportSummary(
+                scientific_summary=message,
+                execution_summary="Execution stopped before prediction.",
+                caveats=[],
+            )
+        return ReportSummary(
+            scientific_summary="Chemistry filter kept zero candidates for this request.",
+            execution_summary="Execution stopped after filtering because no candidates remained.",
+            caveats=[],
         )

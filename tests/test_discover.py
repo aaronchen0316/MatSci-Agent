@@ -1,8 +1,11 @@
 from fastapi.testclient import TestClient
 
 from matsci_agent.api.main import app
+from matsci_agent.agents.planner import ChemistryIntentAgent
 from matsci_agent.schemas import DiscoveryConstraints, DiscoveryRequest
+from matsci_agent.tools.policy_filter import PolicyFilter
 from matsci_agent.workflow.graph import DiscoveryWorkflow
+import matsci_agent.api.main as api_main
 
 
 client = TestClient(app)
@@ -15,6 +18,29 @@ def test_health():
 
 
 def test_discover_endpoint_returns_ranked_candidates():
+    workflow = DiscoveryWorkflow(
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "practical_screening",
+                "decisions": [
+                    {
+                        "material_id": candidate["material_id"],
+                        "keep": candidate["formula"] not in {"AcF3", "SiC"},
+                        "reasons": (
+                            ["radioactive fluoride not practical semiconductor"]
+                            if candidate["formula"] == "AcF3"
+                            else ["contains banned silicon element"]
+                            if candidate["formula"] == "SiC"
+                            else []
+                        ),
+                    }
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+    )
+    api_main.workflow = workflow
     payload = {
         "research_goal": "Find semiconductor materials without silicon and band gap above 2 eV",
         "constraints": {
@@ -32,10 +58,23 @@ def test_discover_endpoint_returns_ranked_candidates():
     if body["candidates"]:
         first = body["candidates"][0]
         assert set(first.keys()) == {"material_id", "formula", "band_gap_ev"}
+        formulas = {candidate["formula"] for candidate in body["candidates"]}
+        assert "AcF3" not in formulas
 
 
 def test_workflow_runs_with_retry_cap():
-    wf = DiscoveryWorkflow()
+    wf = DiscoveryWorkflow(
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "exploratory_screening",
+                "decisions": [
+                    {"material_id": candidate["material_id"], "keep": True, "reasons": []}
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+    )
     req = DiscoveryRequest(
         research_goal="Find high band gap materials",
         constraints=DiscoveryConstraints(max_energy_above_hull=0.0, top_k=2),
@@ -46,6 +85,7 @@ def test_workflow_runs_with_retry_cap():
 
 
 def test_discover_endpoint_refuses_unsupported_diffusivity_request():
+    api_main.workflow = DiscoveryWorkflow()
     payload = {
         "research_goal": "Estimate diffusivity in bulk materials with long molecular dynamics runs",
     }
@@ -55,3 +95,62 @@ def test_discover_endpoint_refuses_unsupported_diffusivity_request():
     assert body["status"] == "unsupported"
     assert body["candidates"] == []
     assert "unsupported" in body["unsupported_reason"].lower()
+
+
+def test_workflow_replenishes_once_when_first_filter_batch_underfills():
+    call_count = {"n": 0}
+
+    def _filter(payload):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            keep_ids = {"mp-mock-003"}
+        else:
+            keep_ids = {"mp-mock-007", "mp-mock-008"}
+        return {
+            "policy_name": "practical_screening",
+            "decisions": [
+                {
+                    "material_id": candidate["material_id"],
+                    "keep": candidate["material_id"] in keep_ids,
+                    "reasons": [] if candidate["material_id"] in keep_ids else ["not good fit"],
+                }
+                for candidate in payload["candidates"]
+            ],
+        }
+
+    wf = DiscoveryWorkflow(
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(inference_fn=_filter),
+    )
+    req = DiscoveryRequest(
+        research_goal="Find semiconductor materials",
+        constraints=DiscoveryConstraints(top_k=3),
+    )
+
+    out = wf.run(req)
+
+    assert call_count["n"] == 2
+    assert out.status in {"success", "partial"}
+    assert len(out.candidates) <= 3
+
+
+def test_workflow_fails_closed_when_filter_returns_invalid_json():
+    wf = DiscoveryWorkflow(
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
+    )
+    req = DiscoveryRequest(
+        research_goal="Find semiconductor materials",
+        constraints=DiscoveryConstraints(top_k=3),
+    )
+
+    out = wf.run(req)
+
+    assert out.status == "failed"
+    assert out.candidates == []
+    assert any("Chemistry filter failed" in message for message in out.messages)
+    assert any(
+        provenance.output_summary.get("failure_code") == "policy_filter_invalid_json"
+        for provenance in out.provenance
+        if provenance.tool_name == "policy_filter"
+    )

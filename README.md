@@ -7,11 +7,12 @@ Production-style scaffold for an agentic materials discovery loop.
 - Tool interfaces with MP-first and MatGL-aware prediction:
   - `mp_retriever` (live Materials Project + mock fallback)
   - `property_predictor` (MP band gap -> MatGL -> torch-hub -> heuristic fallback)
-  - `stability_checker` (mock e-above-hull)
-- LangGraph workflow with retry/refine loop when stability fails
+  - `stability_checker` (MP `energy_above_hull` -> local fallback proxy)
+  - `policy_filter` (LLM-backed chemistry filtering with strict validation and fail-closed behavior)
+- LangGraph workflow with planning, capability guardrail, chemistry filtering, and retry/refine loop when stability fails
 - FastAPI endpoint: `POST /discover`
 - MLflow logging for each tool/step
-- Tests and runnable example
+- Tests, runnable examples, and offline benchmark script
 
 ## Project Structure
 - `src/matsci_agent/schemas.py`: API + tool I/O schemas
@@ -59,6 +60,15 @@ Note:
 uv run uvicorn matsci_agent.api.main:app --app-dir src --reload
 ```
 
+If the LLM chemistry filter is enabled through normal runtime, the same provider credentials used by the parser are also required here:
+- `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`
+- or `OPENAI_API_KEY`
+
+The chemistry filter:
+- only applies to `band_gap_screening`
+- fails closed on timeout, invalid JSON, or incomplete candidate decisions
+- uses one bounded replenish pass when the first kept set underfills `top_k`
+
 ## Example Request
 ```bash
 curl -X POST http://127.0.0.1:8000/discover \
@@ -78,6 +88,7 @@ curl -X POST http://127.0.0.1:8000/discover \
 ```bash
 uv run python examples/run_discovery.py
 uv run python examples/run_mp_retrieval.py
+uv run python examples/benchmark_bandgap_predictor.py --mode small --output artifacts/bandgap_benchmark.json
 ```
 
 ## Run Tests
@@ -95,3 +106,4 @@ docker run --rm -p 8000:8000 matsci-agent:local
 - Improve model-specific MatGL adapters for graph conversion edge cases.
 - Add calibrated uncertainty + DFT triage queue.
 - Enrich provenance with exact MP query IDs and model artifact versions.
+- Broaden the chemistry filter beyond current practical vs exploratory screening.

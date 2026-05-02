@@ -21,6 +21,9 @@ class DiscoveryState(TypedDict, total=False):
     max_iterations: int
     messages: list[str]
     raw_candidates: list[dict[str, Any]]
+    filtered_candidates: list[dict[str, Any]]
+    filter_records: list[dict[str, Any]]
+    filter_replenish_attempts: int
     predictions: list[dict[str, Any]]
     ranked_candidates: list[RankedCandidate]
     stable_found: bool
