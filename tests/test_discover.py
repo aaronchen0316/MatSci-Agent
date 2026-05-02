@@ -27,6 +27,7 @@ def test_discover_endpoint_returns_ranked_candidates():
     res = client.post("/discover", json=payload)
     assert res.status_code == 200
     body = res.json()
+    assert body["status"] in {"success", "partial", "failed"}
     assert len(body["candidates"]) <= 3
     if body["candidates"]:
         first = body["candidates"][0]
@@ -42,3 +43,15 @@ def test_workflow_runs_with_retry_cap():
     out = wf.run(req)
     assert out.iterations >= 1
     assert len(out.candidates) <= 2
+
+
+def test_discover_endpoint_refuses_unsupported_diffusivity_request():
+    payload = {
+        "research_goal": "Estimate diffusivity in bulk materials with long molecular dynamics runs",
+    }
+    res = client.post("/discover", json=payload)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unsupported"
+    assert body["candidates"] == []
+    assert "unsupported" in body["unsupported_reason"].lower()

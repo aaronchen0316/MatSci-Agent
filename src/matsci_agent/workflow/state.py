@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from matsci_agent.schemas import DiscoveryConstraints, RankedCandidate
+from matsci_agent.schemas import (
+    CapabilityAssessment,
+    DiscoveryConstraints,
+    DiscoveryPlan,
+    RankedCandidate,
+    ReportSummary,
+)
 
 
 class DiscoveryState(TypedDict, total=False):
     research_goal: str
+    request_constraints: DiscoveryConstraints
     constraints: DiscoveryConstraints
+    discovery_plan: DiscoveryPlan
+    capability_assessment: CapabilityAssessment
     iteration: int
     max_iterations: int
     messages: list[str]
@@ -15,5 +24,6 @@ class DiscoveryState(TypedDict, total=False):
     predictions: list[dict[str, Any]]
     ranked_candidates: list[RankedCandidate]
     stable_found: bool
+    report_summary: ReportSummary
     provenance: list[dict[str, Any]]
     status: str

@@ -21,6 +21,7 @@ def health() -> dict[str, str]:
 def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
     result = workflow.run(payload)
     return DiscoverySummaryResponse(
+        status=result.status,
         candidates=[
             CandidateBandGapSummary(
                 material_id=rc.candidate.material_id,
@@ -28,5 +29,12 @@ def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
                 band_gap_ev=rc.predicted_properties.band_gap_ev,
             )
             for rc in result.candidates
-        ]
+        ],
+        messages=result.messages,
+        unsupported_reason=(
+            result.capability_assessment.reason_message
+            if result.capability_assessment is not None
+            and not result.capability_assessment.supported
+            else None
+        ),
     )
