@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from matsci_agent.schemas import (
@@ -20,7 +21,7 @@ _MATGL_MODEL_SOURCE: str = ""
 _MATGL_LOAD_ERROR: str | None = None
 _MATGL_RELAXER: Any | None = None
 _MATGL_RELAXER_ERROR: str | None = None
-_DEFAULT_BANDGAP_MODEL = "MEGNet-MP-2019.4.1-BandGap-mfi"
+_DEFAULT_BANDGAP_MODEL = "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"
 
 
 def _heuristic_fallback(formula: str, goal: str, reason: str) -> PredictedProperties:
@@ -108,6 +109,9 @@ def _matgl_model_candidates() -> list[str]:
 
 
 def _load_model_from_torch_hub(model_name: str) -> tuple[Any | None, str | None]:
+    if Path(model_name).exists():
+        return None, "torch_hub_skipped_local_path"
+
     try:
         import torch
     except Exception as exc:
@@ -146,7 +150,7 @@ def _load_matgl_bandgap_model() -> tuple[Any | None, str, str | None]:
 
     for candidate_name in _matgl_model_candidates():
         try:
-            if candidate_name.startswith("MEGNet-"):
+            if Path(candidate_name).name.startswith("MEGNet-"):
                 try:
                     matgl.set_backend("DGL")
                 except Exception as exc:
@@ -288,7 +292,9 @@ def _load_matgl_relaxer() -> tuple[Any | None, str | None]:
     if _MATGL_RELAXER_ERROR is not None:
         return None, _MATGL_RELAXER_ERROR
 
-    relax_model_name = os.getenv("MATSCI_MATGL_RELAX_MODEL", "M3GNet-MP-2021.2.8-PES")
+    relax_model_name = os.getenv(
+        "MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"
+    ).strip()
     try:
         import matgl
         from matgl.ext.ase import Relaxer
@@ -420,10 +426,14 @@ class PropertyPredictor:
     @staticmethod
     def _select_matgl_indices(payload: PropertyPredictorInput) -> tuple[set[int], set[int]]:
         matgl_needed: list[int] = []
-        for idx, candidate in enumerate(payload.candidates):
-            mp_gap = candidate.features.get("mp_band_gap_ev")
-            if payload.calculate_matgl or mp_gap is None:
-                matgl_needed.append(idx)
+        if payload.calculate_matgl and payload.recalculate_top_n is not None:
+            requested = min(len(payload.candidates), payload.recalculate_top_n)
+            matgl_needed = list(range(requested))
+        else:
+            for idx, candidate in enumerate(payload.candidates):
+                mp_gap = candidate.features.get("mp_band_gap_ev")
+                if payload.calculate_matgl or mp_gap is None:
+                    matgl_needed.append(idx)
 
         eligible = [
             idx

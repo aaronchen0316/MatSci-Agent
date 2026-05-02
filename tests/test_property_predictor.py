@@ -66,6 +66,27 @@ def test_predictor_forced_matgl_applies_deterministic_limits_and_provenance_tags
     assert by_id["mp-1"].candidate.features["band_gap_source"] == "fallback"
 
 
+def test_predictor_selective_recalc_limits_forced_matgl_to_top_n():
+    predictor = PropertyPredictor()
+    payload = PropertyPredictorInput(
+        candidates=[
+            Candidate(material_id="mp-1", formula="AlN", features={"mp_band_gap_ev": 5.7, "nsites": 8}),
+            Candidate(material_id="mp-2", formula="GaN", features={"mp_band_gap_ev": 3.2, "nsites": 8}),
+            Candidate(material_id="mp-3", formula="ZnO", features={"mp_band_gap_ev": 2.1, "nsites": 8}),
+        ],
+        goal="recalculate top 1 candidate",
+        calculate_matgl=True,
+        recalculate_top_n=1,
+        matgl_max_recalc_entries=3,
+        matgl_max_atoms=50,
+    )
+
+    out = predictor.run(payload)
+
+    assert out.provenance.output_summary["forced_matgl_count"] == 1
+    assert out.provenance.output_summary["matgl_selected_material_ids"] == ["mp-1"]
+
+
 def test_predict_with_matgl_model_uses_compat_when_primary_path_fails(monkeypatch):
     class BrokenModel:
         def predict_structure(self, _structure):

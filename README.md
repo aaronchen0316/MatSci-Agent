@@ -44,13 +44,15 @@ uv sync --extra dev --extra matgl
 ```
 
 Optional runtime env vars:
-- `MATSCI_MATGL_MODEL`: exact MatGL band-gap model name to load (default: `MEGNet-MP-2019.4.1-BandGap-mfi`)
+- `MATSCI_MATGL_MODEL`: exact MatGL band-gap model name or local model directory (default: `models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi`)
 - `MATSCI_MATGL_MODEL_CANDIDATES`: comma-separated fallback model names
-- `MATSCI_MATGL_RELAX_MODEL`: model used by optional relaxation path
+- `MATSCI_MATGL_RELAX_MODEL`: model name or local directory used by the optional relaxation path (default: `models/pretrained/TensorNet-PES-MatPES-PBE-2025.2`)
 
 Note:
+- The default band-gap model now points to the local downloaded bundle at `models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi`.
 - `MEGNet-MP-2019.4.1-BandGap-mfi` is DGL-backed, so Python `3.12` is the recommended runtime.
 - This scaffold includes a compatibility inference path for this legacy MEGNet checkpoint on modern MatGL runtimes.
+- The optional relaxation path now defaults to the local downloaded bundle at `models/pretrained/TensorNet-PES-MatPES-PBE-2025.2`.
 
 ## Run API
 ```bash
