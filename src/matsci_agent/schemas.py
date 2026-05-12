@@ -82,10 +82,10 @@ class PredictedProperties(BaseModel):
 
 
 class StabilityResult(BaseModel):
-    energy_above_hull: float
-    is_stable: bool
+    energy_above_hull: float | None = None
+    is_stable: bool | None = None
     method: str
-    source: Literal["materials_project", "local_fallback"] = "local_fallback"
+    source: Literal["materials_project", "unknown"] = "unknown"
     used_relaxation: bool = False
 
 

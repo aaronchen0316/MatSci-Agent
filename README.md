@@ -7,7 +7,7 @@ Production-style scaffold for an agentic materials discovery loop.
 - Tool interfaces with MP-first and MatGL-aware prediction:
   - `mp_retriever` (live Materials Project + mock fallback)
   - `property_predictor` (MP band gap -> MatGL -> torch-hub -> heuristic fallback)
-  - `stability_checker` (MP `energy_above_hull` -> local fallback proxy)
+  - `stability_checker` (MP `energy_above_hull` -> stability unknown when MP hull data is missing)
   - `policy_filter` (LLM-backed chemistry filtering with strict validation and fail-closed behavior)
 - LangGraph workflow with planning, capability guardrail, chemistry filtering, and retry/refine loop when stability fails
 - FastAPI endpoint: `POST /discover`
@@ -107,3 +107,24 @@ docker run --rm -p 8000:8000 matsci-agent:local
 - Add calibrated uncertainty + DFT triage queue.
 - Enrich provenance with exact MP query IDs and model artifact versions.
 - Broaden the chemistry filter beyond current practical vs exploratory screening.
+
+## Current Limitations
+- Stability is intentionally conservative:
+  - MP `energy_above_hull` is used when available.
+  - when MP hull data is missing, candidates are returned as stability unknown.
+  - no local proxy or MatGL-based stability estimate is used.
+- Chemistry filter only applies to `band_gap_screening`.
+- Chemistry filter reasons from compact candidate metadata, not richer structure-aware chemistry features.
+- Benchmark tooling exists, but benchmark results are not yet recorded in repo artifacts/docs.
+- Planning layer is still narrow: parser output plus deterministic enrichment, not a richer chemistry ontology.
+- Reporting is compact and deterministic, not a richer scientific analysis layer.
+
+## Current Assessment
+- Good engineering scaffold for agentic bulk-inorganic band-gap screening.
+- Strong control-plane pieces already exist:
+  - typed planning
+  - deterministic capability guardrail
+  - LLM chemistry filtering with strict validation
+  - bounded local model execution
+  - offline benchmark tooling
+- Not yet a research-grade materials discovery system because chemistry coverage is narrow and benchmark results are not yet published.

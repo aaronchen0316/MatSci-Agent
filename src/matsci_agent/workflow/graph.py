@@ -345,9 +345,13 @@ class DiscoveryWorkflow:
         for rec in sorted(
             result.records,
             key=lambda x: (
-                not x.stability.is_stable,
+                0 if x.stability.is_stable is True else 1 if x.stability.is_stable is False else 2,
                 -x.predicted.band_gap_ev,
-                x.stability.energy_above_hull,
+                (
+                    x.stability.energy_above_hull
+                    if x.stability.energy_above_hull is not None
+                    else 999.0
+                ),
             ),
         ):
             if (
@@ -355,7 +359,12 @@ class DiscoveryWorkflow:
                 and rec.predicted.band_gap_ev < min_band_gap_ev
             ):
                 continue
-            score = rec.predicted.band_gap_ev - 100.0 * rec.stability.energy_above_hull
+            hull_penalty = (
+                100.0 * rec.stability.energy_above_hull
+                if rec.stability.energy_above_hull is not None
+                else 0.0
+            )
+            score = rec.predicted.band_gap_ev - hull_penalty
             ranked.append(
                 RankedCandidate(
                     rank=len(ranked) + 1,
@@ -367,11 +376,17 @@ class DiscoveryWorkflow:
                 )
             )
 
-        stable_found = any(r.stability.is_stable for r in ranked)
+        stable_found = any(r.stability.is_stable is True for r in ranked)
+        known_stability_present = any(r.stability.is_stable is not None for r in ranked)
+        messages = state.get("messages", [])
+        if ranked and not known_stability_present:
+            messages.append(
+                "Stability is unknown for returned candidates because MP energy_above_hull data is missing."
+            )
         self.logger.log_step(
             "stability_checker",
             metrics={
-                "stable_count": sum(1 for r in ranked if r.stability.is_stable),
+                "stable_count": sum(1 for r in ranked if r.stability.is_stable is True),
                 "ranked_count": len(ranked),
                 "iteration": float(state["iteration"]),
             },
@@ -381,6 +396,8 @@ class DiscoveryWorkflow:
         return {
             "ranked_candidates": ranked[: state["constraints"].top_k],
             "stable_found": stable_found,
+            "messages": messages,
+            "known_stability_present": known_stability_present,
             "provenance": provenance,
         }
 
@@ -486,6 +503,8 @@ class DiscoveryWorkflow:
 
     def _route_after_stability(self, state: DiscoveryState) -> str:
         if state.get("stable_found"):
+            return "done"
+        if not state.get("known_stability_present", False):
             return "done"
         if state["iteration"] >= state["max_iterations"]:
             return "done"

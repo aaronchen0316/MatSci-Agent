@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from matsci_agent.api.main import app
 from matsci_agent.agents.planner import ChemistryIntentAgent
+from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
 from matsci_agent.schemas import DiscoveryConstraints, DiscoveryRequest
 from matsci_agent.tools.policy_filter import PolicyFilter
 from matsci_agent.workflow.graph import DiscoveryWorkflow
@@ -64,6 +65,7 @@ def test_discover_endpoint_returns_ranked_candidates():
 
 def test_workflow_runs_with_retry_cap():
     wf = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(
             inference_fn=lambda payload: {
@@ -154,3 +156,69 @@ def test_workflow_fails_closed_when_filter_returns_invalid_json():
         for provenance in out.provenance
         if provenance.tool_name == "policy_filter"
     )
+
+
+def test_workflow_unknown_stability_does_not_trigger_refine():
+    wf = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "exploratory_screening",
+                "decisions": [
+                    {
+                        "material_id": candidate["material_id"],
+                        "keep": candidate["material_id"] in {"mp-mock-005", "mp-mock-006"},
+                        "reasons": [] if candidate["material_id"] in {"mp-mock-005", "mp-mock-006"} else ["not selected"],
+                    }
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+    )
+    req = DiscoveryRequest(
+        research_goal="Find semiconductor materials",
+        constraints=DiscoveryConstraints(top_k=5),
+    )
+
+    out = wf.run(req)
+
+    assert out.iterations == 1
+    assert out.status == "partial"
+    assert out.candidates
+    assert any(
+        "Stability is unknown" in message
+        for message in out.messages
+    )
+
+
+def test_workflow_ranks_known_stability_before_unknown():
+    wf = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "exploratory_screening",
+                "decisions": [
+                    {
+                        "material_id": candidate["material_id"],
+                        "keep": candidate["material_id"] in {"mp-mock-003", "mp-mock-005"},
+                        "reasons": [] if candidate["material_id"] in {"mp-mock-003", "mp-mock-005"} else ["not selected"],
+                    }
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+    )
+    req = DiscoveryRequest(
+        research_goal="Find semiconductor materials",
+        constraints=DiscoveryConstraints(top_k=5),
+    )
+
+    out = wf.run(req)
+
+    assert len(out.candidates) >= 2
+    assert out.candidates[0].candidate.material_id == "mp-mock-003"
+    assert out.candidates[0].stability.is_stable is True
+    assert out.candidates[1].candidate.material_id == "mp-mock-005"
+    assert out.candidates[1].stability.is_stable is None

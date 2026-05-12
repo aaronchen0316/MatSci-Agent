@@ -9,7 +9,7 @@ MatSci-Agent is an agentic materials-screening system for bulk inorganic materia
 - Retrieval source: Materials Project
 - Primary target property: `band_gap`
 - Property policy: prefer MP values, fall back to local MatGL models when data is missing or recalculation is explicitly requested
-- Stability policy: prefer MP `energy_above_hull`, fall back to local bounded proxy when MP stability data is missing
+- Stability policy: use MP `energy_above_hull` when available, otherwise mark stability unknown
 - Candidate selection policy: LLM-backed chemistry `policy_filter` after retrieval and before prediction, with fail-closed validation and one bounded replenish pass
 - Evaluation path: offline band-gap benchmark tooling against MP-known entries
 
@@ -94,7 +94,7 @@ It records candidate-level fields such as:
 ### Stability Source
 Origin of candidate stability evidence:
 - `materials_project`
-- `local_fallback`
+- `unknown`
 
 This is carried on `StabilityResult` together with `method` and `used_relaxation`.
 
@@ -111,10 +111,21 @@ Offline evaluation path that samples MP entries with known `band_gap`, forces lo
 - band-gap screening
 - optional bounded MatGL recalculation
 - optional bounded structure relaxation
-- MP-backed stability filtering with local fallback proxy
+- MP-backed stability filtering with honest unknown state when MP hull data is missing
 - LLM-backed practical vs exploratory chemistry filtering with fail-closed validation
 - ranking and compact reporting
 - offline benchmark artifact generation
+
+## Current Limitations
+- Stability is still weakest scientific layer:
+  - MP `energy_above_hull` is authoritative when present.
+  - when MP hull data is missing, current code returns stability unknown.
+  - no local proxy or MatGL-based stability estimate is used.
+- Chemistry filter only covers `band_gap_screening`.
+- Chemistry filter reasons from compact metadata, not richer structure-aware features.
+- Benchmark library exists, but repo does not yet carry committed benchmark result baselines.
+- Planning remains narrow and mostly parser-plus-regex enrichment.
+- Reporting remains compact/deterministic rather than rich scientific analysis.
 
 ## Current Unsupported Scope
 - diffusivity calculation
@@ -135,6 +146,17 @@ Current `DiscoveryWorkflow` shape:
 7. reporting agent
 
 This preserves agentic behavior where reasoning helps most, while keeping execution reproducible and debuggable.
+
+## Bottom Line
+- Current repo is strong agentic engineering scaffold for bulk-inorganic band-gap screening.
+- Main strengths:
+  - typed contracts
+  - deterministic capability admission
+  - validated LLM chemistry filter
+  - bounded expensive compute
+  - reproducible local model packaging
+- Main gap:
+  - not yet research-grade materials discovery because chemistry scope is narrow and benchmark results are not yet published.
 
 ## Module Map
 
@@ -215,7 +237,7 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 - MP-first stability semantics
 - Owns:
   - MP `energy_above_hull` path
-  - local fallback proxy path
+  - honest unknown-stability path
   - stability-source provenance
 
 ### Reporting Agent

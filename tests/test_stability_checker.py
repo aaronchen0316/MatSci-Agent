@@ -33,7 +33,7 @@ def test_stability_checker_prefers_mp_energy_above_hull():
     assert record.stability.used_relaxation is False
 
 
-def test_stability_checker_fallback_is_tagged():
+def test_stability_checker_missing_hull_returns_unknown():
     tool = StabilityChecker()
     payload = StabilityCheckerInput(
         predictions=[
@@ -52,5 +52,8 @@ def test_stability_checker_fallback_is_tagged():
     out = tool.run(payload)
 
     record = out.records[0]
-    assert record.stability.source == "local_fallback"
-    assert record.stability.method in {"local_energy_proxy", "local_relaxed_energy_proxy"}
+    assert record.stability.energy_above_hull is None
+    assert record.stability.is_stable is None
+    assert record.stability.source == "unknown"
+    assert record.stability.method == "stability_unknown_no_mp_hull"
+    assert record.stability.used_relaxation is False

@@ -27,6 +27,7 @@ class DiscoveryState(TypedDict, total=False):
     predictions: list[dict[str, Any]]
     ranked_candidates: list[RankedCandidate]
     stable_found: bool
+    known_stability_present: bool
     report_summary: ReportSummary
     provenance: list[dict[str, Any]]
     status: str
