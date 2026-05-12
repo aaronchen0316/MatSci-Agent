@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from matsci_agent.config import settings
 from matsci_agent.schemas import (
     CandidateBandGapSummary,
+    DiscoveryFullResponse,
     DiscoveryRequest,
     DiscoverySummaryResponse,
 )
@@ -38,3 +39,8 @@ def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
             else None
         ),
     )
+
+
+@app.post("/discover/full", response_model=DiscoveryFullResponse)
+def discover_full(payload: DiscoveryRequest) -> DiscoveryFullResponse:
+    return workflow.run_full(payload)

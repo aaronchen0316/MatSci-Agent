@@ -5,6 +5,7 @@ MatSci-Agent is an agentic materials-screening system for bulk inorganic materia
 
 ## Current System Shape
 - Public entrypoint: `POST /discover`
+- Debug trace entrypoint: `POST /discover/full`
 - Orchestration: LangGraph workflow
 - Retrieval source: Materials Project
 - Primary target property: `band_gap`
@@ -162,8 +163,11 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 
 ### API Entrypoint
 - `src/matsci_agent/api/main.py`
-- Caller-facing FastAPI shell for `POST /discover`
-- Converts full `DiscoveryResponse` into compact `DiscoverySummaryResponse`
+- Caller-facing FastAPI shell for:
+  - `POST /discover`
+  - `POST /discover/full`
+- `POST /discover` converts full workflow output into compact `DiscoverySummaryResponse`
+- `POST /discover/full` exposes full workflow trace for debugging, explainability, and interviews
 
 ### Workflow Skeleton
 - `src/matsci_agent/workflow/graph.py`

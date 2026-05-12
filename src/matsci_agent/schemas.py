@@ -118,6 +118,13 @@ class DiscoveryResponse(BaseModel):
     report_summary: ReportSummary | None = None
 
 
+class DiscoveryFullResponse(DiscoveryResponse):
+    raw_candidates: list[Candidate] = Field(default_factory=list)
+    filtered_candidates: list[Candidate] = Field(default_factory=list)
+    filter_records: list[PolicyFilterRecord] = Field(default_factory=list)
+    known_stability_present: bool | None = None
+
+
 class CandidateBandGapSummary(BaseModel):
     material_id: str
     formula: str

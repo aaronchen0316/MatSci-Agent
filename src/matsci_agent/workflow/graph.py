@@ -10,11 +10,13 @@ from matsci_agent.observability.mlflow_logger import MLflowLogger
 from matsci_agent.schemas import (
     Candidate,
     CapabilityAssessment,
+    DiscoveryFullResponse,
     DiscoveryRequest,
     DiscoveryResponse,
     DiscoveryPlan,
     MPRetrieverInput,
     PolicyFilterInput,
+    PolicyFilterRecord,
     PropertyPredictorInput,
     PropertyPredictionRecord,
     RankedCandidate,
@@ -511,6 +513,42 @@ class DiscoveryWorkflow:
         return "retry"
 
     def run(self, request: DiscoveryRequest) -> DiscoveryResponse:
+        final_state = self._invoke(request)
+        return self._build_response(request, final_state)
+
+    def run_full(self, request: DiscoveryRequest) -> DiscoveryFullResponse:
+        final_state = self._invoke(request)
+        ranked = final_state.get("ranked_candidates", [])
+        return DiscoveryFullResponse(
+            research_goal=request.research_goal,
+            constraints=final_state.get("constraints", request.constraints),
+            status=final_state.get("status", "failed"),
+            iterations=final_state.get("iteration", 1),
+            candidates=ranked,
+            provenance=[
+                ToolCallProvenance.model_validate(p)
+                for p in final_state.get("provenance", [])
+            ],
+            messages=final_state.get("messages", []),
+            discovery_plan=final_state.get("discovery_plan"),
+            capability_assessment=final_state.get("capability_assessment"),
+            report_summary=final_state.get("report_summary"),
+            raw_candidates=[
+                Candidate.model_validate(c)
+                for c in final_state.get("raw_candidates", [])
+            ],
+            filtered_candidates=[
+                Candidate.model_validate(c)
+                for c in final_state.get("filtered_candidates", [])
+            ],
+            filter_records=[
+                PolicyFilterRecord.model_validate(r)
+                for r in final_state.get("filter_records", [])
+            ],
+            known_stability_present=final_state.get("known_stability_present"),
+        )
+
+    def _invoke(self, request: DiscoveryRequest) -> DiscoveryState:
         initial_state: DiscoveryState = {
             "research_goal": request.research_goal,
             "request_constraints": request.constraints,
@@ -524,7 +562,13 @@ class DiscoveryWorkflow:
 
         with self.logger.run("discover"):
             final_state = self.graph.invoke(initial_state)
+        return final_state
 
+    def _build_response(
+        self,
+        request: DiscoveryRequest,
+        final_state: DiscoveryState,
+    ) -> DiscoveryResponse:
         ranked = final_state.get("ranked_candidates", [])
         return DiscoveryResponse(
             research_goal=request.research_goal,

@@ -99,6 +99,91 @@ def test_discover_endpoint_refuses_unsupported_diffusivity_request():
     assert "unsupported" in body["unsupported_reason"].lower()
 
 
+def test_discover_full_endpoint_returns_debug_trace():
+    workflow = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "practical_screening",
+                "decisions": [
+                    {
+                        "material_id": candidate["material_id"],
+                        "keep": candidate["material_id"] in {"mp-mock-003", "mp-mock-005"},
+                        "reasons": [] if candidate["material_id"] in {"mp-mock-003", "mp-mock-005"} else ["not selected"],
+                    }
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+    )
+    api_main.workflow = workflow
+    payload = {
+        "research_goal": "Find semiconductor materials",
+        "constraints": {"top_k": 5},
+    }
+
+    res = client.post("/discover/full", json=payload)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert "raw_candidates" in body
+    assert "filtered_candidates" in body
+    assert "filter_records" in body
+    assert "candidates" in body
+    assert "messages" in body
+    assert "provenance" in body
+    assert "discovery_plan" in body
+    assert "capability_assessment" in body
+    assert "report_summary" in body
+    assert body["raw_candidates"]
+    assert body["filtered_candidates"]
+    assert body["filter_records"]
+
+
+def test_discover_full_includes_capability_assessment_for_unsupported_request():
+    api_main.workflow = DiscoveryWorkflow()
+    payload = {
+        "research_goal": "Estimate diffusivity in bulk materials with long molecular dynamics runs",
+    }
+
+    res = client.post("/discover/full", json=payload)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unsupported"
+    assert body["capability_assessment"] is not None
+    assert body["raw_candidates"] == []
+    assert body["filtered_candidates"] == []
+    assert body["filter_records"] == []
+
+
+def test_discover_full_shows_filter_failure_trace():
+    workflow = DiscoveryWorkflow(
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
+    )
+    api_main.workflow = workflow
+    payload = {
+        "research_goal": "Find semiconductor materials",
+        "constraints": {"top_k": 3},
+    }
+
+    res = client.post("/discover/full", json=payload)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "failed"
+    assert body["filtered_candidates"] == []
+    assert body["filter_records"] == []
+    assert any("Chemistry filter failed" in message for message in body["messages"])
+    assert any(
+        provenance["tool_name"] == "policy_filter"
+        and provenance["output_summary"].get("failure_code") == "policy_filter_invalid_json"
+        for provenance in body["provenance"]
+    )
+
+
 def test_workflow_replenishes_once_when_first_filter_batch_underfills():
     call_count = {"n": 0}
 

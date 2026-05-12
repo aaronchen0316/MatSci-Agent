@@ -11,6 +11,7 @@ Production-style scaffold for an agentic materials discovery loop.
   - `policy_filter` (LLM-backed chemistry filtering with strict validation and fail-closed behavior)
 - LangGraph workflow with planning, capability guardrail, chemistry filtering, and retry/refine loop when stability fails
 - FastAPI endpoint: `POST /discover`
+- FastAPI debug trace endpoint: `POST /discover/full`
 - MLflow logging for each tool/step
 - Tests, runnable examples, and offline benchmark script
 
@@ -60,6 +61,10 @@ Note:
 uv run uvicorn matsci_agent.api.main:app --app-dir src --reload
 ```
 
+Endpoint roles:
+- `POST /discover`: compact user-facing shortlist
+- `POST /discover/full`: debug/audit trace with internal workflow artifacts
+
 If the LLM chemistry filter is enabled through normal runtime, the same provider credentials used by the parser are also required here:
 - `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`
 - or `OPENAI_API_KEY`
@@ -68,6 +73,7 @@ The chemistry filter:
 - only applies to `band_gap_screening`
 - fails closed on timeout, invalid JSON, or incomplete candidate decisions
 - uses one bounded replenish pass when the first kept set underfills `top_k`
+- appears in full detail through `/discover/full`, including filter decisions and provenance
 
 ## Example Request
 ```bash
