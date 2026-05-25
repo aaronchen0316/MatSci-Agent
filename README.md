@@ -1,19 +1,19 @@
 # MatSci-Agent
 
-Production-style scaffold for an agentic materials discovery loop.
+Production-style scaffold for retrieval-first materials screening over Materials Project candidates.
 
 ## Features
 - Strict Pydantic schemas for API and tool contracts
-- Tool interfaces with MP-first and MatGL-aware prediction:
+- Tool interfaces with MP-first retrieval and optional MatGL-aware prediction:
   - `mp_retriever` (live Materials Project + mock fallback)
   - `property_predictor` (MP band gap -> MatGL -> torch-hub -> heuristic fallback)
-  - `stability_checker` (MP `energy_above_hull` -> stability unknown when MP hull data is missing)
-  - `policy_filter` (LLM-backed chemistry filtering with strict validation and fail-closed behavior)
-- LangGraph workflow with planning, capability guardrail, chemistry filtering, and retry/refine loop when stability fails
+  - `stability_checker` (MP `energy_above_hull` annotation -> stability unknown when MP hull data is missing)
+  - `policy_filter` (optional LLM-backed chemistry filtering with strict validation and fail-closed behavior when enabled)
+- LangGraph workflow with planning, capability guardrail, retrieval, optional chemistry filtering, prediction, stability annotation, ranking, and reporting
 - FastAPI endpoint: `POST /discover`
 - FastAPI debug trace endpoint: `POST /discover/full`
-- MLflow logging for each tool/step
-- Tests, runnable examples, and offline benchmark script
+- Optional MLflow logging for each tool/step
+- Tests, runnable examples, and offline benchmark script/artifacts
 
 ## Project Structure
 - `src/matsci_agent/schemas.py`: API + tool I/O schemas
@@ -62,18 +62,33 @@ uv run uvicorn matsci_agent.api.main:app --app-dir src --reload
 ```
 
 Endpoint roles:
-- `POST /discover`: compact user-facing shortlist
+- `POST /discover`: compact annotated shortlist for normal user flow
 - `POST /discover/full`: debug/audit trace with internal workflow artifacts
 
-If the LLM chemistry filter is enabled through normal runtime, the same provider credentials used by the parser are also required here:
+Enable optional chemistry filtering with:
+```bash
+export MATSCI_ENABLE_POLICY_FILTER=1
+```
+
+If the LLM chemistry filter is enabled, the same provider credentials used by the parser are also required here:
 - `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`
 - or `OPENAI_API_KEY`
 
 The chemistry filter:
 - only applies to `band_gap_screening`
+- is disabled by default for MVP retrieval-first flow
 - fails closed on timeout, invalid JSON, or incomplete candidate decisions
 - uses one bounded replenish pass when the first kept set underfills `top_k`
 - appears in full detail through `/discover/full`, including filter decisions and provenance
+
+`POST /discover` candidate summaries include:
+- `material_id`
+- `formula`
+- `band_gap_ev`
+- `band_gap_source`
+- `energy_above_hull`
+- `is_stable`
+- `stability_source`
 
 ## Example Request
 ```bash
@@ -97,6 +112,22 @@ uv run python examples/run_mp_retrieval.py
 uv run python examples/benchmark_bandgap_predictor.py --mode small --output artifacts/bandgap_benchmark.json
 ```
 
+## Published Small Baseline
+- Artifact files:
+  - `artifacts/bandgap_benchmark_small.json`
+  - `artifacts/bandgap_benchmark_small.csv`
+  - `artifacts/bandgap_benchmark_small.md`
+- Generated: `2026-05-25T17:47:20.297358Z`
+- Metrics:
+  - `sample_size=10`
+  - `mae=1.6451`
+  - `rmse=2.2116`
+  - `rank_correlation=0.7178`
+  - `matgl_count=10`
+  - `fallback_count=0`
+
+This is a provisional small-mode baseline for the optional prediction/recalc path. It measures agreement against MP-known band gaps, not absolute experimental truth.
+
 ## Run Tests
 ```bash
 uv run pytest -q
@@ -119,18 +150,19 @@ docker run --rm -p 8000:8000 matsci-agent:local
   - MP `energy_above_hull` is used when available.
   - when MP hull data is missing, candidates are returned as stability unknown.
   - no local proxy or MatGL-based stability estimate is used.
-- Chemistry filter only applies to `band_gap_screening`.
+- Chemistry filter is optional, only applies to `band_gap_screening`, and still reasons from compact metadata.
 - Chemistry filter reasons from compact candidate metadata, not richer structure-aware chemistry features.
-- Benchmark tooling exists, but benchmark results are not yet recorded in repo artifacts/docs.
+- Benchmark baseline currently measures optional prediction/recalc quality against MP-known band gaps, not absolute experimental truth.
+- The committed baseline is small and provisional; it is useful for regression tracking, not broad scientific validation.
 - Planning layer is still narrow: parser output plus deterministic enrichment, not a richer chemistry ontology.
 - Reporting is compact and deterministic, not a richer scientific analysis layer.
 
 ## Current Assessment
-- Good engineering scaffold for agentic bulk-inorganic band-gap screening.
+- Good engineering scaffold for retrieval-first bulk-inorganic band-gap screening.
 - Strong control-plane pieces already exist:
   - typed planning
   - deterministic capability guardrail
-  - LLM chemistry filtering with strict validation
+  - optional LLM chemistry filtering with strict validation
   - bounded local model execution
   - offline benchmark tooling
-- Not yet a research-grade materials discovery system because chemistry coverage is narrow and benchmark results are not yet published.
+- Not yet a research-grade materials discovery system because chemistry coverage is narrow and planning/reporting remain intentionally thin.

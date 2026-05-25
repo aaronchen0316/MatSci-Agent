@@ -28,6 +28,10 @@ def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
                 material_id=rc.candidate.material_id,
                 formula=rc.candidate.formula,
                 band_gap_ev=rc.predicted_properties.band_gap_ev,
+                band_gap_source=rc.candidate.features.get("band_gap_source"),
+                energy_above_hull=rc.stability.energy_above_hull,
+                is_stable=rc.stability.is_stable,
+                stability_source=rc.stability.source,
             )
             for rc in result.candidates
         ],

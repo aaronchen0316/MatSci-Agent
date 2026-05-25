@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from langgraph.graph import END, START, StateGraph
 
 from matsci_agent.agents.planner import ChemistryIntentAgent
@@ -42,6 +44,7 @@ class DiscoveryWorkflow:
         intent_agent: ChemistryIntentAgent | None = None,
         capability_guardrail: CapabilityGuardrail | None = None,
         reporting_agent: ResultsReportingAgent | None = None,
+        enable_policy_filter: bool | None = None,
     ) -> None:
         self.retriever = retriever or MPRetriever()
         self.predictor = predictor or PropertyPredictor()
@@ -51,6 +54,11 @@ class DiscoveryWorkflow:
         self.intent_agent = intent_agent or ChemistryIntentAgent()
         self.capability_guardrail = capability_guardrail or CapabilityGuardrail()
         self.reporting_agent = reporting_agent or ResultsReportingAgent()
+        self.enable_policy_filter = (
+            enable_policy_filter
+            if enable_policy_filter is not None
+            else os.getenv("MATSCI_ENABLE_POLICY_FILTER", "").lower() in {"1", "true", "yes", "on"}
+        )
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -176,6 +184,19 @@ class DiscoveryWorkflow:
     def _policy_filter(self, state: DiscoveryState) -> DiscoveryState:
         all_candidates = [Candidate.model_validate(c) for c in state.get("raw_candidates", [])]
         plan = state["discovery_plan"]
+        if not self.enable_policy_filter:
+            result = self.policy_filter.skip(
+                PolicyFilterInput(candidates=all_candidates, discovery_plan=plan),
+                policy="disabled_mvp_pass_through",
+            )
+            provenance = state.get("provenance", [])
+            provenance.append(result.provenance.model_dump())
+            return {
+                "filtered_candidates": [c.model_dump() for c in result.filtered_candidates],
+                "filter_records": [r.model_dump() for r in result.records],
+                "provenance": provenance,
+                "filter_replenish_attempts": 0,
+            }
         if plan.task_class != "band_gap_screening":
             result = self.policy_filter.run(
                 PolicyFilterInput(candidates=all_candidates, discovery_plan=plan)
@@ -347,8 +368,8 @@ class DiscoveryWorkflow:
         for rec in sorted(
             result.records,
             key=lambda x: (
-                0 if x.stability.is_stable is True else 1 if x.stability.is_stable is False else 2,
                 -x.predicted.band_gap_ev,
+                0 if x.stability.is_stable is True else 1 if x.stability.is_stable is None else 2,
                 (
                     x.stability.energy_above_hull
                     if x.stability.energy_above_hull is not None
@@ -460,8 +481,7 @@ class DiscoveryWorkflow:
                 ranked_candidates=ranked,
                 iteration=state.get("iteration", 1),
             )
-            has_stable = any(r.stability.is_stable for r in ranked)
-            status = "success" if has_stable else "partial" if ranked else "failed"
+            status = "success" if ranked else "failed"
 
         messages = state.get("messages", [])
         if not capability.supported:
@@ -504,13 +524,7 @@ class DiscoveryWorkflow:
         return "continue"
 
     def _route_after_stability(self, state: DiscoveryState) -> str:
-        if state.get("stable_found"):
-            return "done"
-        if not state.get("known_stability_present", False):
-            return "done"
-        if state["iteration"] >= state["max_iterations"]:
-            return "done"
-        return "retry"
+        return "done"
 
     def run(self, request: DiscoveryRequest) -> DiscoveryResponse:
         final_state = self._invoke(request)

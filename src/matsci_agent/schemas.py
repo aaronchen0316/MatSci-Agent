@@ -129,6 +129,10 @@ class CandidateBandGapSummary(BaseModel):
     material_id: str
     formula: str
     band_gap_ev: float = Field(ge=0)
+    band_gap_source: str | None = None
+    energy_above_hull: float | None = None
+    is_stable: bool | None = None
+    stability_source: str | None = None
 
 
 class DiscoverySummaryResponse(BaseModel):
