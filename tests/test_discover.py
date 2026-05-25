@@ -20,6 +20,7 @@ def test_health():
 
 def test_discover_endpoint_returns_ranked_candidates():
     workflow = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(
             inference_fn=lambda payload: {
@@ -40,6 +41,7 @@ def test_discover_endpoint_returns_ranked_candidates():
                 ],
             }
         ),
+        enable_policy_filter=True,
     )
     api_main.workflow = workflow
     payload = {
@@ -54,35 +56,35 @@ def test_discover_endpoint_returns_ranked_candidates():
     res = client.post("/discover", json=payload)
     assert res.status_code == 200
     body = res.json()
-    assert body["status"] in {"success", "partial", "failed"}
+    assert body["status"] == "success"
     assert len(body["candidates"]) <= 3
     if body["candidates"]:
         first = body["candidates"][0]
-        assert set(first.keys()) == {"material_id", "formula", "band_gap_ev"}
+        assert set(first.keys()) == {
+            "material_id",
+            "formula",
+            "band_gap_ev",
+            "band_gap_source",
+            "energy_above_hull",
+            "is_stable",
+            "stability_source",
+        }
         formulas = {candidate["formula"] for candidate in body["candidates"]}
         assert "AcF3" not in formulas
 
 
-def test_workflow_runs_with_retry_cap():
+def test_workflow_returns_candidates_without_policy_filter_enabled():
     wf = DiscoveryWorkflow(
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
-        policy_filter=PolicyFilter(
-            inference_fn=lambda payload: {
-                "policy_name": "exploratory_screening",
-                "decisions": [
-                    {"material_id": candidate["material_id"], "keep": True, "reasons": []}
-                    for candidate in payload["candidates"]
-                ],
-            }
-        ),
     )
     req = DiscoveryRequest(
         research_goal="Find high band gap materials",
         constraints=DiscoveryConstraints(max_energy_above_hull=0.0, top_k=2),
     )
     out = wf.run(req)
-    assert out.iterations >= 1
+    assert out.status == "success"
+    assert out.iterations == 1
     assert len(out.candidates) <= 2
 
 
@@ -116,6 +118,7 @@ def test_discover_full_endpoint_returns_debug_trace():
                 ],
             }
         ),
+        enable_policy_filter=True,
     )
     api_main.workflow = workflow
     payload = {
@@ -160,8 +163,10 @@ def test_discover_full_includes_capability_assessment_for_unsupported_request():
 
 def test_discover_full_shows_filter_failure_trace():
     workflow = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
+        enable_policy_filter=True,
     )
     api_main.workflow = workflow
     payload = {
@@ -206,8 +211,10 @@ def test_workflow_replenishes_once_when_first_filter_batch_underfills():
         }
 
     wf = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=_filter),
+        enable_policy_filter=True,
     )
     req = DiscoveryRequest(
         research_goal="Find semiconductor materials",
@@ -217,14 +224,16 @@ def test_workflow_replenishes_once_when_first_filter_batch_underfills():
     out = wf.run(req)
 
     assert call_count["n"] == 2
-    assert out.status in {"success", "partial"}
+    assert out.status == "success"
     assert len(out.candidates) <= 3
 
 
 def test_workflow_fails_closed_when_filter_returns_invalid_json():
     wf = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
+        enable_policy_filter=True,
     )
     req = DiscoveryRequest(
         research_goal="Find semiconductor materials",
@@ -260,6 +269,7 @@ def test_workflow_unknown_stability_does_not_trigger_refine():
                 ],
             }
         ),
+        enable_policy_filter=True,
     )
     req = DiscoveryRequest(
         research_goal="Find semiconductor materials",
@@ -269,7 +279,7 @@ def test_workflow_unknown_stability_does_not_trigger_refine():
     out = wf.run(req)
 
     assert out.iterations == 1
-    assert out.status == "partial"
+    assert out.status == "success"
     assert out.candidates
     assert any(
         "Stability is unknown" in message
@@ -277,7 +287,7 @@ def test_workflow_unknown_stability_does_not_trigger_refine():
     )
 
 
-def test_workflow_ranks_known_stability_before_unknown():
+def test_workflow_returns_stability_annotations_in_ranked_candidates():
     wf = DiscoveryWorkflow(
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
@@ -294,6 +304,7 @@ def test_workflow_ranks_known_stability_before_unknown():
                 ],
             }
         ),
+        enable_policy_filter=True,
     )
     req = DiscoveryRequest(
         research_goal="Find semiconductor materials",
@@ -303,7 +314,8 @@ def test_workflow_ranks_known_stability_before_unknown():
     out = wf.run(req)
 
     assert len(out.candidates) >= 2
-    assert out.candidates[0].candidate.material_id == "mp-mock-003"
-    assert out.candidates[0].stability.is_stable is True
-    assert out.candidates[1].candidate.material_id == "mp-mock-005"
-    assert out.candidates[1].stability.is_stable is None
+    by_id = {candidate.candidate.material_id: candidate for candidate in out.candidates}
+    assert by_id["mp-mock-003"].stability.is_stable is True
+    assert by_id["mp-mock-003"].stability.source == "materials_project"
+    assert by_id["mp-mock-005"].stability.is_stable is None
+    assert by_id["mp-mock-005"].stability.source == "unknown"

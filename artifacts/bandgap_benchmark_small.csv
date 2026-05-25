@@ -1,0 +1,11 @@
+material_id,formula,actual_band_gap_ev,predicted_band_gap_ev,backend,band_gap_source,matgl_skipped_reason
+mp-11107,Ac2O3,3.522599999999999,0.0,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-32800,Ac2S3,2.2962,1.917409896850586,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-977351,Ac2S3,3.0275,2.541752338409424,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-1183115,AcAlO3,4.1024,0.0,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-27972,AcBr3,4.103299999999999,3.998347282409668,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-30274,AcBrO,4.241,0.6396031975746155,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-27971,AcCl3,5.0865,4.739541053771973,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-30273,AcClO,4.4451,3.919795036315918,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-866101,AcCrO3,2.0031,0.0,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,
+mp-977360,AcF3,7.4101,6.030077934265137,matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model,matgl,

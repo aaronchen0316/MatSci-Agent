@@ -1,7 +1,7 @@
 # MatSci-Agent Context
 
 ## Purpose
-MatSci-Agent is an agentic materials-screening system for bulk inorganic materials. The current product goal is natural-language-driven band-gap screening over Materials Project candidates, with optional local MatGL recalculation and bounded relaxation.
+MatSci-Agent is an agentic materials-screening system for bulk inorganic materials. The current product goal is retrieval-first natural-language-driven band-gap screening over Materials Project candidates, with optional local MatGL recalculation and bounded relaxation as secondary layers.
 
 ## Current System Shape
 - Public entrypoint: `POST /discover`
@@ -11,7 +11,7 @@ MatSci-Agent is an agentic materials-screening system for bulk inorganic materia
 - Primary target property: `band_gap`
 - Property policy: prefer MP values, fall back to local MatGL models when data is missing or recalculation is explicitly requested
 - Stability policy: use MP `energy_above_hull` when available, otherwise mark stability unknown
-- Candidate selection policy: LLM-backed chemistry `policy_filter` after retrieval and before prediction, with fail-closed validation and one bounded replenish pass
+- Candidate selection policy: optional LLM-backed chemistry `policy_filter` after retrieval and before prediction, with fail-closed validation and one bounded replenish pass only when explicitly enabled
 - Evaluation path: offline band-gap benchmark tooling against MP-known entries
 
 ## Core Terms
@@ -28,6 +28,11 @@ A typed planning object produced by the chemistry/intent agent. It normalizes th
 - `practicality_mode`
 - `ranking_intent`
 - `execution_policy`
+
+Current MVP emphasis:
+- keep the plan thin and executable
+- preserve broader schema compatibility
+- treat richer non-MVP intent labels as secondary unless they drive live execution
 
 ### Task Class
 A normalized label for the requested workflow. Examples:
@@ -77,6 +82,7 @@ LLM-backed post-retrieval, pre-prediction chemistry filter driven by `DiscoveryP
 
 Current behavior:
 - only active for `band_gap_screening`
+- disabled by default in retrieval-first MVP flow
 - reuses the same provider/model configuration as the parser
 - validates strict JSON decisions for every candidate in the batch
 - fails closed on request, timeout, parse, or validation errors
@@ -107,13 +113,22 @@ Offline evaluation path that samples MP entries with known `band_gap`, forces lo
 - failure/skipped counts
 - MP passthrough vs MatGL vs fallback counts
 
+Current published baseline:
+- artifact set: `artifacts/bandgap_benchmark_small.{json,csv,md}`
+- generated at: `2026-05-25T17:47:20.297358Z`
+- sample size: `10`
+- `mae=1.6451`
+- `rmse=2.2116`
+- `rank_correlation=0.7178`
+- all 10 rows used MatGL path, with `fallback_count=0`
+
 ## Current Supported Scope
 - bulk inorganic candidate retrieval from Materials Project
 - band-gap screening
 - optional bounded MatGL recalculation
 - optional bounded structure relaxation
-- MP-backed stability filtering with honest unknown state when MP hull data is missing
-- LLM-backed practical vs exploratory chemistry filtering with fail-closed validation
+- MP-backed stability annotation with honest unknown state when MP hull data is missing
+- optional LLM-backed practical vs exploratory chemistry filtering with fail-closed validation
 - ranking and compact reporting
 - offline benchmark artifact generation
 
@@ -124,7 +139,7 @@ Offline evaluation path that samples MP entries with known `band_gap`, forces lo
   - no local proxy or MatGL-based stability estimate is used.
 - Chemistry filter only covers `band_gap_screening`.
 - Chemistry filter reasons from compact metadata, not richer structure-aware features.
-- Benchmark library exists, but repo does not yet carry committed benchmark result baselines.
+- Published benchmark baseline is intentionally small and only supports regression tracking for optional prediction/recalc behavior.
 - Planning remains narrow and mostly parser-plus-regex enrichment.
 - Reporting remains compact/deterministic rather than rich scientific analysis.
 
@@ -141,7 +156,7 @@ Current `DiscoveryWorkflow` shape:
 1. chemistry/intent agent
 2. deterministic capability guardrail using a finite task registry
 3. Materials Project retrieval
-4. LLM-backed `policy_filter`
+4. optional LLM-backed `policy_filter`
 5. deterministic prediction pipeline
 6. stability evaluation
 7. reporting agent
@@ -166,7 +181,7 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 - Caller-facing FastAPI shell for:
   - `POST /discover`
   - `POST /discover/full`
-- `POST /discover` converts full workflow output into compact `DiscoverySummaryResponse`
+- `POST /discover` converts full workflow output into compact annotated `DiscoverySummaryResponse`
 - `POST /discover/full` exposes full workflow trace for debugging, explainability, and interviews
 
 ### Workflow Skeleton
@@ -174,9 +189,9 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 - Central orchestrator for `DiscoveryWorkflow`
 - Owns routing for:
   - capability refusal
-  - chemistry-filter fail-closed stop
+  - optional chemistry-filter fail-closed stop
   - replenish pass
-  - retry/refine on failed stability
+  - retrieval-first success path with stability as annotation/light ranking signal
 
 ### Workflow State
 - `src/matsci_agent/workflow/state.py`
@@ -220,7 +235,7 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 
 ### Policy Filter
 - `src/matsci_agent/tools/policy_filter.py`
-- LLM-backed chemistry filter for `band_gap_screening`
+- Optional LLM-backed chemistry filter for `band_gap_screening`
 - Owns:
   - strict screening-judge prompt
   - provider/model reuse from parser config
@@ -242,7 +257,7 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 - Owns:
   - MP `energy_above_hull` path
   - honest unknown-stability path
-  - stability-source provenance
+  - stability-source provenance used as annotation and light ranking hint
 
 ### Reporting Agent
 - `src/matsci_agent/agents/reporter.py`

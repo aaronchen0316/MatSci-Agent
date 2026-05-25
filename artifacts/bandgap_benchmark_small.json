@@ -1,0 +1,107 @@
+{
+  "mode": "small",
+  "generated_at": "2026-05-25T17:47:20.297358Z",
+  "metrics": {
+    "sample_size": 10,
+    "mae": 1.6451273260402677,
+    "rmse": 2.2116080028248213,
+    "rank_correlation": 0.7178454493936232,
+    "failure_count": 0,
+    "skipped_count": 0,
+    "mp_passthrough_count": 0,
+    "matgl_count": 10,
+    "fallback_count": 0
+  },
+  "rows": [
+    {
+      "material_id": "mp-11107",
+      "formula": "Ac2O3",
+      "actual_band_gap_ev": 3.522599999999999,
+      "predicted_band_gap_ev": 0.0,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-32800",
+      "formula": "Ac2S3",
+      "actual_band_gap_ev": 2.2962,
+      "predicted_band_gap_ev": 1.917409896850586,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-977351",
+      "formula": "Ac2S3",
+      "actual_band_gap_ev": 3.0275,
+      "predicted_band_gap_ev": 2.541752338409424,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-1183115",
+      "formula": "AcAlO3",
+      "actual_band_gap_ev": 4.1024,
+      "predicted_band_gap_ev": 0.0,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-27972",
+      "formula": "AcBr3",
+      "actual_band_gap_ev": 4.103299999999999,
+      "predicted_band_gap_ev": 3.998347282409668,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-30274",
+      "formula": "AcBrO",
+      "actual_band_gap_ev": 4.241,
+      "predicted_band_gap_ev": 0.6396031975746155,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-27971",
+      "formula": "AcCl3",
+      "actual_band_gap_ev": 5.0865,
+      "predicted_band_gap_ev": 4.739541053771973,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-30273",
+      "formula": "AcClO",
+      "actual_band_gap_ev": 4.4451,
+      "predicted_band_gap_ev": 3.919795036315918,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-866101",
+      "formula": "AcCrO3",
+      "actual_band_gap_ev": 2.0031,
+      "predicted_band_gap_ev": 0.0,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    },
+    {
+      "material_id": "mp-977360",
+      "formula": "AcF3",
+      "actual_band_gap_ev": 7.4101,
+      "predicted_band_gap_ev": 6.030077934265137,
+      "backend": "matgl_band_gap:models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi:matgl_load_model",
+      "band_gap_source": "matgl",
+      "matgl_skipped_reason": null
+    }
+  ]
+}

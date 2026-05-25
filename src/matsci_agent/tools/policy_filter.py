@@ -43,6 +43,9 @@ class PolicyFilter:
         self.inference_fn = inference_fn
         self.last_response_preview: str = ""
 
+    def skip(self, payload: PolicyFilterInput, policy: str) -> PolicyFilterOutput:
+        return self._pass_through(payload, policy=policy)
+
     def run(self, payload: PolicyFilterInput) -> PolicyFilterOutput:
         policy = self._policy_name(payload)
         if payload.discovery_plan.task_class != "band_gap_screening":
