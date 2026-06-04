@@ -32,6 +32,8 @@ def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
                 energy_above_hull=rc.stability.energy_above_hull,
                 is_stable=rc.stability.is_stable,
                 stability_source=rc.stability.source,
+                has_multiple_entries=rc.candidate.has_multiple_entries,
+                entry_count=rc.candidate.entry_count,
             )
             for rc in result.candidates
         ],

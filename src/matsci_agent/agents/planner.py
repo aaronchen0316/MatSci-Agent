@@ -4,11 +4,12 @@ import re
 from collections.abc import Callable
 
 from matsci_agent.config import settings
-from matsci_agent.nlp.parser import merge_constraints, parse_goal_to_constraints
+from matsci_agent.nlp.parser import merge_constraints, parse_goal_to_intent
 from matsci_agent.schemas import (
     DiscoveryConstraints,
     DiscoveryPlan,
     ExecutionPolicy,
+    ParsedDiscoveryIntent,
 )
 
 
@@ -21,9 +22,9 @@ class ChemistryIntentAgent:
 
     def __init__(
         self,
-        parser_fn: Callable[[str], DiscoveryConstraints] | None = None,
+        parser_fn: Callable[[str], ParsedDiscoveryIntent | DiscoveryConstraints] | None = None,
     ) -> None:
-        self.parser_fn = parser_fn or parse_goal_to_constraints
+        self.parser_fn = parser_fn or parse_goal_to_intent
 
     def plan(
         self,
@@ -32,9 +33,14 @@ class ChemistryIntentAgent:
         explicit_base_fields: set[str] | None = None,
     ) -> DiscoveryPlan:
         parsed = self.parser_fn(research_goal)
+        if isinstance(parsed, DiscoveryConstraints):
+            parsed_intent = ParsedDiscoveryIntent(constraints=parsed)
+        else:
+            parsed_intent = parsed
+        requested_material_class = parsed_intent.requested_material_class
         resolved = merge_constraints(
             base_constraints,
-            parsed,
+            parsed_intent.constraints,
             explicit_base_fields=explicit_base_fields,
         )
         task_class = self._infer_task_class(research_goal, resolved)
@@ -54,7 +60,8 @@ class ChemistryIntentAgent:
             task_class=task_class,
             parsed_constraints=resolved,
             application_intent=self._infer_application_intent(research_goal),
-            material_class=self._infer_material_class(research_goal),
+            source_universe="materials_project_entries",
+            requested_material_class=requested_material_class,
             practicality_mode=self._infer_practicality_mode(research_goal),
             ranking_intent=self._infer_ranking_intent(research_goal, resolved),
             reporting_focus="compact_summary",
@@ -93,29 +100,10 @@ class ChemistryIntentAgent:
 
     @staticmethod
     def _infer_application_intent(goal: str) -> str:
-        text = goal.lower()
-        if re.search(r"\bpractical\b|\bdevice\b|\bapplication\b|\bdeploy", text):
-            return "practical_screening"
-        if re.search(r"\bexploratory\b|\bfundamental\b|\bextreme\b|\bnovel\b", text):
-            return "exploratory_screening"
-        if "semiconductor" in text or "materials" in text:
-            return "practical_screening"
-        return "unknown"
-
-    @staticmethod
-    def _infer_material_class(goal: str) -> str:
-        text = goal.lower()
-        if re.search(r"\balloy\b|\boxide\b|\bnitride\b|\bsemiconductor\b|\bbulk\b|\bmaterial", text):
-            return "bulk_inorganic"
         return "unknown"
 
     @staticmethod
     def _infer_practicality_mode(goal: str) -> str:
-        text = goal.lower()
-        if re.search(r"\bexploratory\b|\bfundamental\b", text):
-            return "exploratory"
-        if re.search(r"\bpractical\b|\bdevice\b|\bapplication\b", text):
-            return "applied"
         return "unknown"
 
     @staticmethod
@@ -132,6 +120,7 @@ class ChemistryIntentAgent:
         text = goal.lower()
         patterns = [
             r"\bredo\s+calculation\s+of\s+top\s+(\d{1,3})\b",
+            r"\brecalculate\s+(?:the\s+)?top\s+(\d{1,3})\b",
             r"\brecalculate\s+top\s+(\d{1,3})\b",
             r"\brecompute\s+top\s+(\d{1,3})\b",
             r"\btop\s+(\d{1,3})\s+candidates?\s+.*\brecalculate\b",

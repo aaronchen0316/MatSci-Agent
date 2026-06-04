@@ -6,6 +6,44 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class FloatRange(BaseModel):
+    min: float | None = None
+    max: float | None = None
+
+
+class IntRange(BaseModel):
+    min: int | None = None
+    max: int | None = None
+
+
+class MPFilters(BaseModel):
+    formula: str | list[str] | None = None
+    chemsys: str | list[str] | None = None
+    material_ids: str | list[str] | None = None
+    elements: list[str] = Field(default_factory=list)
+    exclude_elements: list[str] = Field(default_factory=list)
+    possible_species: list[str] = Field(default_factory=list)
+    has_props: list[str] = Field(default_factory=list)
+    is_metal: bool | None = None
+    is_stable: bool | None = None
+    is_gap_direct: bool | None = None
+    theoretical: bool | None = None
+    deprecated: bool | None = None
+    has_reconstructed: bool | None = None
+    crystal_system: str | None = None
+    spacegroup_number: int | list[int] | None = None
+    spacegroup_symbol: str | list[str] | None = None
+    band_gap: FloatRange | None = None
+    energy_above_hull: FloatRange | None = None
+    formation_energy: FloatRange | None = None
+    density: FloatRange | None = None
+    efermi: FloatRange | None = None
+    total_magnetization: FloatRange | None = None
+    volume: FloatRange | None = None
+    num_sites: IntRange | None = None
+    num_elements: IntRange | None = None
+
+
 class DiscoveryConstraints(BaseModel):
     banned_elements: list[str] = Field(default_factory=list)
     required_elements: list[str] = Field(default_factory=list)
@@ -13,6 +51,12 @@ class DiscoveryConstraints(BaseModel):
     calculate_matgl: bool = False
     max_energy_above_hull: float = Field(default=0.1, ge=0)
     top_k: int = Field(default=5, ge=1, le=100)
+    mp_filters: MPFilters = Field(default_factory=MPFilters)
+
+
+class ParsedDiscoveryIntent(BaseModel):
+    constraints: DiscoveryConstraints = Field(default_factory=DiscoveryConstraints)
+    requested_material_class: str = "unknown"
 
 
 class DiscoveryRequest(BaseModel):
@@ -42,13 +86,10 @@ class DiscoveryPlan(BaseModel):
         "unknown_task",
     ] = "unknown_task"
     parsed_constraints: DiscoveryConstraints = Field(default_factory=DiscoveryConstraints)
-    application_intent: Literal[
-        "practical_screening",
-        "exploratory_screening",
-        "unknown",
-    ] = "unknown"
-    material_class: Literal["bulk_inorganic", "unknown"] = "unknown"
-    practicality_mode: Literal["applied", "exploratory", "unknown"] = "unknown"
+    application_intent: str = "unknown"
+    source_universe: Literal["materials_project_entries", "unknown"] = "unknown"
+    requested_material_class: str = "unknown"
+    practicality_mode: str = "unknown"
     ranking_intent: Literal["band_gap_desc", "default"] = "default"
     reporting_focus: str = "compact_summary"
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
@@ -72,6 +113,8 @@ class Candidate(BaseModel):
     material_id: str
     formula: str
     source: Literal["materials_project", "mock"] = "mock"
+    has_multiple_entries: bool = False
+    entry_count: int = Field(default=1, ge=1)
     features: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -133,6 +176,8 @@ class CandidateBandGapSummary(BaseModel):
     energy_above_hull: float | None = None
     is_stable: bool | None = None
     stability_source: str | None = None
+    has_multiple_entries: bool = False
+    entry_count: int = Field(default=1, ge=1)
 
 
 class DiscoverySummaryResponse(BaseModel):

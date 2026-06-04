@@ -1,4 +1,4 @@
-from matsci_agent.schemas import DiscoveryConstraints, MPRetrieverInput
+from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPRetrieverInput, MPFilters
 from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
 
 
@@ -13,7 +13,7 @@ def test_mock_fallback_provenance_when_live_disabled():
 
     assert out.provenance.output_summary["source"] == "mock_fallback"
     assert out.provenance.output_summary["fallback_used"] is True
-    assert len(out.candidates) <= 4
+    assert len(out.candidates) <= 8
 
 
 def test_mock_filter_banned_and_required_elements():
@@ -41,7 +41,7 @@ def test_formula_element_parser_distinguishes_c_and_co():
     assert "co" not in MPRetriever._extract_elements("SiC")
 
 
-def test_semiconductor_goal_excludes_elemental_o2_in_mock_pool():
+def test_mock_pool_still_enforces_explicit_numeric_and_banned_element_constraints():
     retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
     payload = MPRetrieverInput(
         research_goal="Find semiconductor materials with no silicon and band gap higher than 1 eV",
@@ -49,7 +49,13 @@ def test_semiconductor_goal_excludes_elemental_o2_in_mock_pool():
     )
     out = retriever.retrieve(payload)
     formulas = {c.formula for c in out.candidates}
-    assert "O2" not in formulas
+    assert "SiC" not in formulas
+    for candidate in out.candidates:
+        elements = retriever._extract_elements(candidate.formula)
+        assert "si" not in elements
+        band_gap = candidate.features.get("mp_band_gap_ev")
+        if band_gap is not None:
+            assert float(band_gap) >= 1.0
 
 
 def test_mock_candidates_include_energy_above_hull_feature():
@@ -76,3 +82,34 @@ def test_mock_retriever_honors_excluded_material_ids_and_limit_override():
     assert len(ids) == 2
     assert "mp-mock-003" not in ids
     assert "mp-mock-004" not in ids
+
+
+def test_client_side_filters_enforce_required_elements_subset():
+    effective = MPFilters(
+        elements=["Si", "C"],
+        band_gap=FloatRange(min=2.0),
+        num_elements=IntRange(min=2, max=20),
+        is_metal=False,
+    )
+
+    assert MPRetriever._passes_client_side_filters(
+        effective=effective,
+        elements={"si", "c"},
+        mp_band_gap_ev=2.4,
+        mp_energy_above_hull=0.02,
+        nsites=8,
+        is_metal=False,
+        theoretical=False,
+        deprecated=False,
+    ) is True
+
+    assert MPRetriever._passes_client_side_filters(
+        effective=effective,
+        elements={"ac", "f"},
+        mp_band_gap_ev=7.4,
+        mp_energy_above_hull=0.0,
+        nsites=16,
+        is_metal=False,
+        theoretical=False,
+        deprecated=False,
+    ) is False

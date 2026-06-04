@@ -15,6 +15,7 @@ from matsci_agent.schemas import (
     DiscoveryFullResponse,
     DiscoveryRequest,
     DiscoveryResponse,
+    DiscoveryConstraints,
     DiscoveryPlan,
     MPRetrieverInput,
     PolicyFilterInput,
@@ -31,6 +32,10 @@ from matsci_agent.tools.policy_filter import PolicyFilter, PolicyFilterError
 from matsci_agent.tools.property_predictor import PropertyPredictor
 from matsci_agent.tools.stability_checker import StabilityChecker
 from matsci_agent.workflow.state import DiscoveryState
+
+_INITIAL_POLICY_FILTER_BATCH_LIMIT = 10
+_ZERO_PASS_RELAXED_RETRIEVAL_LIMIT = 100
+_ZERO_PASS_RELAXED_SCREEN_LIMIT = 50
 
 
 class DiscoveryWorkflow:
@@ -57,7 +62,7 @@ class DiscoveryWorkflow:
         self.enable_policy_filter = (
             enable_policy_filter
             if enable_policy_filter is not None
-            else os.getenv("MATSCI_ENABLE_POLICY_FILTER", "").lower() in {"1", "true", "yes", "on"}
+            else True
         )
         self.graph = self._build_graph()
 
@@ -120,8 +125,8 @@ class DiscoveryWorkflow:
                 },
                 output_summary={
                     "task_class": plan.task_class,
-                    "application_intent": plan.application_intent,
-                    "material_class": plan.material_class,
+                    "source_universe": plan.source_universe,
+                    "requested_material_class": plan.requested_material_class,
                     "ranking_intent": plan.ranking_intent,
                     "calculate_matgl": plan.execution_policy.calculate_matgl,
                     "recalculate_top_n": plan.execution_policy.recalculate_top_n,
@@ -212,7 +217,11 @@ class DiscoveryWorkflow:
 
         provenance = state.get("provenance", [])
         messages = state.get("messages", [])
-        selected = self._select_filter_candidates(all_candidates, limit=10)
+        selected = self._select_filter_candidates(
+            all_candidates,
+            limit=max(_INITIAL_POLICY_FILTER_BATCH_LIMIT, state["constraints"].top_k),
+            constraints=state["constraints"],
+        )
         try:
             first_result = self.policy_filter.run(
                 PolicyFilterInput(candidates=selected, discovery_plan=plan)
@@ -230,7 +239,57 @@ class DiscoveryWorkflow:
         seen_ids = {candidate.material_id for candidate in selected}
         replenish_attempts = 0
 
-        if len(accepted) < state["constraints"].top_k:
+        if not accepted:
+            replenish_attempts = 1
+            relaxed_limit = max(
+                _ZERO_PASS_RELAXED_RETRIEVAL_LIMIT,
+                state["constraints"].top_k * 20,
+            )
+            refill = self.retriever.retrieve(
+                MPRetrieverInput(
+                    research_goal=state["research_goal"],
+                    constraints=state["constraints"],
+                    exclude_material_ids=sorted(seen_ids),
+                    limit_override=relaxed_limit,
+                )
+            )
+            refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
+            refill_selected = self._select_filter_candidates(
+                refill_candidates,
+                limit=max(_ZERO_PASS_RELAXED_SCREEN_LIMIT, state["constraints"].top_k),
+                constraints=state["constraints"],
+            )
+            if refill_selected:
+                try:
+                    second_result = self.policy_filter.run(
+                        PolicyFilterInput(candidates=refill_selected, discovery_plan=plan)
+                    )
+                except PolicyFilterError as exc:
+                    return self._policy_filter_failed_state(
+                        state,
+                        batch_size=len(refill_selected),
+                        replenish_attempts=1,
+                        error=exc,
+                    )
+                accepted.extend(second_result.filtered_candidates)
+                records.extend(second_result.records)
+                provenance.append(
+                    ToolCallProvenance(
+                        tool_name="mp_retriever_replenish",
+                        input_payload={
+                            "research_goal": state["research_goal"],
+                            "exclude_material_ids": sorted(seen_ids),
+                            "limit_override": relaxed_limit,
+                            "trigger": "zero_policy_filter_passes",
+                        },
+                        output_summary={
+                            "candidate_count": len(refill_candidates),
+                            "screened_count": len(refill_selected),
+                        },
+                    ).model_dump()
+                )
+                provenance.append(second_result.provenance.model_dump())
+        elif len(accepted) < state["constraints"].top_k:
             replenish_attempts = 1
             deficit = state["constraints"].top_k - len(accepted)
             refill = self.retriever.retrieve(
@@ -242,7 +301,11 @@ class DiscoveryWorkflow:
                 )
             )
             refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
-            refill_selected = self._select_filter_candidates(refill_candidates, limit=10)
+            refill_selected = self._select_filter_candidates(
+                refill_candidates,
+                limit=10,
+                constraints=state["constraints"],
+            )
             if refill_selected:
                 try:
                     second_result = self.policy_filter.run(
@@ -601,7 +664,25 @@ class DiscoveryWorkflow:
         )
 
     @staticmethod
-    def _cheap_candidate_sort_key(candidate: Candidate) -> tuple[float, float, int, str]:
+    def _cheap_candidate_sort_key(
+        candidate: Candidate,
+        constraints: DiscoveryConstraints | None = None,
+    ) -> tuple[int, int, float, float, int, str]:
+        required_elements = {
+            str(token).lower()
+            for token in ((constraints.required_elements if constraints is not None else []) or [])
+        }
+        candidate_elements_raw = candidate.features.get("elements")
+        if isinstance(candidate_elements_raw, list) and candidate_elements_raw:
+            candidate_elements = {str(token).lower() for token in candidate_elements_raw}
+        else:
+            candidate_elements = MPRetriever._extract_elements(candidate.formula)
+        if required_elements and candidate_elements == required_elements:
+            element_fit = 0
+        elif required_elements and required_elements.issubset(candidate_elements):
+            element_fit = 1
+        else:
+            element_fit = 2
         mp_gap = candidate.features.get("mp_band_gap_ev")
         mp_hull = candidate.features.get("mp_energy_above_hull")
         completeness = sum(
@@ -610,14 +691,24 @@ class DiscoveryWorkflow:
             if candidate.features.get(key) is not None
         )
         return (
+            element_fit,
+            len(candidate_elements) if candidate_elements else 999,
             -(float(mp_gap) if isinstance(mp_gap, (int, float)) else -1.0),
             float(mp_hull) if isinstance(mp_hull, (int, float)) else 999.0,
             -completeness,
             candidate.material_id,
         )
 
-    def _select_filter_candidates(self, candidates: list[Candidate], limit: int) -> list[Candidate]:
-        return sorted(candidates, key=self._cheap_candidate_sort_key)[:limit]
+    def _select_filter_candidates(
+        self,
+        candidates: list[Candidate],
+        limit: int,
+        constraints: DiscoveryConstraints | None = None,
+    ) -> list[Candidate]:
+        return sorted(
+            candidates,
+            key=lambda candidate: self._cheap_candidate_sort_key(candidate, constraints),
+        )[:limit]
 
     def _policy_filter_failed_state(
         self,
