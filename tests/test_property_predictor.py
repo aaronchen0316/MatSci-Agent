@@ -87,6 +87,30 @@ def test_predictor_selective_recalc_limits_forced_matgl_to_top_n():
     assert out.provenance.output_summary["matgl_selected_material_ids"] == ["mp-1"]
 
 
+def test_predictor_selective_recalc_falls_back_for_unselected_missing_mp_gap():
+    predictor = PropertyPredictor()
+    payload = PropertyPredictorInput(
+        candidates=[
+            Candidate(material_id="mp-1", formula="AlN", features={"mp_band_gap_ev": 5.7, "nsites": 8}),
+            Candidate(material_id="mp-2", formula="GaN", features={"mp_band_gap_ev": 3.2, "nsites": 8}),
+            Candidate(material_id="mp-3", formula="Fe2VAl", features={"mp_band_gap_ev": None, "nsites": 12}),
+        ],
+        goal="recalculate the top 2 candidates with MatGL",
+        calculate_matgl=True,
+        recalculate_top_n=2,
+        matgl_max_recalc_entries=2,
+        matgl_max_atoms=50,
+    )
+
+    out = predictor.run(payload)
+
+    assert out.provenance.output_summary["forced_matgl_count"] == 2
+    assert out.provenance.output_summary["fallback_count"] >= 1
+    by_id = {prediction.candidate.material_id: prediction for prediction in out.predictions}
+    assert by_id["mp-3"].candidate.features["band_gap_source"] == "fallback"
+    assert by_id["mp-3"].predicted.backend.startswith("m3gnet_structure_fallback:")
+
+
 def test_predict_with_matgl_model_uses_compat_when_primary_path_fails(monkeypatch):
     class BrokenModel:
         def predict_structure(self, _structure):
