@@ -471,13 +471,22 @@ class PropertyPredictor:
             candidate.features["matgl_forced"] = bool(payload.calculate_matgl)
 
             if not needs_matgl:
-                predicted = PredictedProperties(
-                    band_gap_ev=float(mp_gap),
-                    uncertainty=0.2,
-                    backend="materials_project_band_gap",
-                )
-                used_mp_count += 1
-                candidate.features["band_gap_source"] = "materials_project"
+                if has_mp_gap:
+                    predicted = PredictedProperties(
+                        band_gap_ev=float(mp_gap),
+                        uncertainty=0.2,
+                        backend="materials_project_band_gap",
+                    )
+                    used_mp_count += 1
+                    candidate.features["band_gap_source"] = "materials_project"
+                else:
+                    predicted = _heuristic_fallback(
+                        candidate.formula,
+                        payload.goal,
+                        reason="not_selected_for_matgl_recalc",
+                    )
+                    fallback_count += 1
+                    candidate.features["band_gap_source"] = "fallback"
                 predictions.append(
                     PropertyPredictionRecord(candidate=candidate, predicted=predicted)
                 )
