@@ -2,11 +2,19 @@ from fastapi.testclient import TestClient
 
 from matsci_agent.api.main import app
 from matsci_agent.agents.planner import ChemistryIntentAgent
+import matsci_agent.api.main as api_main
+from matsci_agent.schemas import (
+    Candidate,
+    DiscoveryConstraints,
+    DiscoveryRequest,
+    MPRetrieverInput,
+    MPRetrieverOutput,
+    ParsedDiscoveryIntent,
+    ToolCallProvenance,
+)
 from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
-from matsci_agent.schemas import DiscoveryConstraints, DiscoveryRequest
 from matsci_agent.tools.policy_filter import PolicyFilter
 from matsci_agent.workflow.graph import DiscoveryWorkflow
-import matsci_agent.api.main as api_main
 
 
 client = TestClient(app)
@@ -21,7 +29,9 @@ def test_health():
 def test_discover_endpoint_returns_ranked_candidates():
     workflow = DiscoveryWorkflow(
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
-        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
+        ),
         policy_filter=PolicyFilter(
             inference_fn=lambda payload: {
                 "policy_name": "practical_screening",
@@ -68,15 +78,20 @@ def test_discover_endpoint_returns_ranked_candidates():
             "energy_above_hull",
             "is_stable",
             "stability_source",
+            "has_multiple_entries",
+            "entry_count",
         }
         formulas = {candidate["formula"] for candidate in body["candidates"]}
         assert "AcF3" not in formulas
 
 
-def test_workflow_returns_candidates_without_policy_filter_enabled():
+def test_workflow_can_still_skip_policy_filter_when_explicitly_disabled():
     wf = DiscoveryWorkflow(
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
-        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
+        ),
+        enable_policy_filter=False,
     )
     req = DiscoveryRequest(
         research_goal="Find high band gap materials",
@@ -86,6 +101,30 @@ def test_workflow_returns_candidates_without_policy_filter_enabled():
     assert out.status == "success"
     assert out.iterations == 1
     assert len(out.candidates) <= 2
+
+
+def test_workflow_defaults_to_policy_filter_fails_closed_without_llm_credentials(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY_RAG", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+    wf = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+    )
+    req = DiscoveryRequest(
+        research_goal="Find semiconductor materials without silicon and band gap above 2 eV",
+        constraints=DiscoveryConstraints(
+            banned_elements=["Si"],
+            min_band_gap_ev=2.0,
+            max_energy_above_hull=0.08,
+            top_k=5,
+        ),
+    )
+
+    out = wf.run(req)
+
+    assert out.status == "failed"
+    assert any("Chemistry filter failed" in message for message in out.messages)
 
 
 def test_discover_endpoint_refuses_unsupported_diffusivity_request():
@@ -104,7 +143,9 @@ def test_discover_endpoint_refuses_unsupported_diffusivity_request():
 def test_discover_full_endpoint_returns_debug_trace():
     workflow = DiscoveryWorkflow(
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
-        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
+        ),
         policy_filter=PolicyFilter(
             inference_fn=lambda payload: {
                 "policy_name": "practical_screening",
@@ -139,6 +180,9 @@ def test_discover_full_endpoint_returns_debug_trace():
     assert "discovery_plan" in body
     assert "capability_assessment" in body
     assert "report_summary" in body
+    assert body["discovery_plan"]["source_universe"] == "materials_project_entries"
+    assert body["discovery_plan"]["requested_material_class"] == "semiconductor"
+    assert "material_class" not in body["discovery_plan"]
     assert body["raw_candidates"]
     assert body["filtered_candidates"]
     assert body["filter_records"]
@@ -226,6 +270,98 @@ def test_workflow_replenishes_once_when_first_filter_batch_underfills():
     assert call_count["n"] == 2
     assert out.status == "success"
     assert len(out.candidates) <= 3
+
+
+def test_workflow_relaxes_retrieval_limit_when_first_filter_batch_has_zero_passes():
+    class WideRetriever(MPRetriever):
+        def __init__(self):
+            super().__init__(MPRetrieverConfig(use_live_if_available=False))
+            self.limit_overrides: list[int | None] = []
+
+        def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
+            self.limit_overrides.append(payload.limit_override)
+            prefix = "raw" if payload.limit_override is None else "relaxed"
+            candidates = [
+                Candidate(
+                    material_id=f"{prefix}-{index}",
+                    formula="SiC" if prefix == "relaxed" and index == 0 else f"SiC{index}H",
+                    source="mock",
+                    features={
+                        "elements": ["Si", "C"] if prefix == "relaxed" and index == 0 else ["Si", "C", "H"],
+                        "mp_band_gap_ev": 2.5,
+                        "mp_energy_above_hull": 0.01,
+                        "nsites": 8,
+                        "is_metal": False,
+                    },
+                )
+                for index in range(20)
+            ]
+            return MPRetrieverOutput(
+                candidates=candidates,
+                provenance=ToolCallProvenance(
+                    tool_name="wide_retriever",
+                    input_payload=payload.model_dump(mode="json"),
+                    output_summary={"candidate_count": len(candidates)},
+                ),
+            )
+
+    call_count = {"n": 0}
+
+    def _filter(payload):
+        call_count["n"] += 1
+        return {
+            "policy_name": "chemistry_screening",
+            "decisions": [
+                {
+                    "material_id": candidate["material_id"],
+                    "keep": candidate["material_id"] == "relaxed-0",
+                    "reasons": [] if candidate["material_id"] == "relaxed-0" else ["not requested material concept"],
+                }
+                for candidate in payload["candidates"]
+            ],
+        }
+
+    retriever = WideRetriever()
+    wf = DiscoveryWorkflow(
+        retriever=retriever,
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
+        ),
+        policy_filter=PolicyFilter(inference_fn=_filter),
+        enable_policy_filter=True,
+    )
+    req = DiscoveryRequest(
+        research_goal="Find semiconductor materials with silicon and carbon and band gap above 2 eV",
+        constraints=DiscoveryConstraints(required_elements=["Si", "C"], min_band_gap_ev=2.0, top_k=1),
+    )
+
+    out = wf.run(req)
+
+    assert out.status == "success"
+    assert call_count["n"] == 2
+    assert retriever.limit_overrides == [None, 100]
+    assert out.candidates[0].candidate.material_id == "relaxed-0"
+
+
+def test_filter_candidate_selection_prioritizes_exact_required_element_set():
+    wf = DiscoveryWorkflow(enable_policy_filter=False)
+    constraints = DiscoveryConstraints(required_elements=["Si", "C"])
+    candidates = [
+        Candidate(
+            material_id="complex",
+            formula="SiH12C2N4O4",
+            features={"elements": ["Si", "C", "H", "N", "O"], "mp_band_gap_ev": 7.0},
+        ),
+        Candidate(
+            material_id="binary",
+            formula="SiC",
+            features={"elements": ["Si", "C"], "mp_band_gap_ev": 2.4},
+        ),
+    ]
+
+    selected = wf._select_filter_candidates(candidates, limit=2, constraints=constraints)
+
+    assert [candidate.material_id for candidate in selected] == ["binary", "complex"]
 
 
 def test_workflow_fails_closed_when_filter_returns_invalid_json():

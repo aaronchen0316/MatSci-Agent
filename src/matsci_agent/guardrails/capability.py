@@ -34,7 +34,7 @@ TASK_REGISTRY: dict[str, TaskCapability] = {
             "Diffusivity is unsupported because the current system only implements bulk band-gap screening "
             "and does not include MD or transport-property simulation."
         ),
-        suggested_next_action="Try a band-gap screening request over bulk inorganic candidates.",
+        suggested_next_action="Try a band-gap screening request over Materials Project candidates.",
     ),
     "molecular_dynamics": TaskCapability(
         supported=False,
