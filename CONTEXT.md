@@ -1,7 +1,7 @@
 # MatSci-Agent Context
 
 ## Purpose
-MatSci-Agent is an agentic materials-screening system for bulk inorganic materials. The current product goal is retrieval-first natural-language-driven band-gap screening over Materials Project candidates, with optional local MatGL recalculation and bounded relaxation as secondary layers.
+MatSci-Agent is an agentic materials-screening system for Materials Project entries. The current product goal is retrieval-first natural-language-driven band-gap screening over Materials Project candidates, with optional local MatGL recalculation and bounded relaxation as secondary layers.
 
 ## Current System Shape
 - Public entrypoint: `POST /discover`
@@ -11,7 +11,7 @@ MatSci-Agent is an agentic materials-screening system for bulk inorganic materia
 - Primary target property: `band_gap`
 - Property policy: prefer MP values, fall back to local MatGL models when data is missing or recalculation is explicitly requested
 - Stability policy: use MP `energy_above_hull` when available, otherwise mark stability unknown
-- Candidate selection policy: optional LLM-backed chemistry `policy_filter` after retrieval and before prediction, with fail-closed validation and one bounded replenish pass only when explicitly enabled
+- Candidate selection policy: default-on LLM-backed chemistry `policy_filter` after retrieval and before prediction, with fail-closed validation, deterministic hard reject guardrail for impractical elements, and one bounded replenish pass
 - Evaluation path: offline band-gap benchmark tooling against MP-known entries
 
 ## Core Terms
@@ -24,8 +24,8 @@ The raw natural-language user request, such as:
 A typed planning object produced by the chemistry/intent agent. It normalizes the research goal into executable fields such as:
 - `task_class`
 - `parsed_constraints`
-- `application_intent`
-- `practicality_mode`
+- `source_universe`
+- `requested_material_class`
 - `ranking_intent`
 - `execution_policy`
 
@@ -82,21 +82,66 @@ LLM-backed post-retrieval, pre-prediction chemistry filter driven by `DiscoveryP
 
 Current behavior:
 - only active for `band_gap_screening`
-- disabled by default in retrieval-first MVP flow
-- reuses the same provider/model configuration as the parser
+- enabled by default in retrieval-first flow
+- reuses the same OpenRouter-backed model configuration as the parser
 - validates strict JSON decisions for every candidate in the batch
 - fails closed on request, timeout, parse, or validation errors
+- enforces deterministic hard rejection for impractical/radioactive elements
 - uses one bounded replenish pass when the first kept set underfills `top_k`
-
-Current policy modes:
-- `practical_screening`
-- `exploratory_screening`
+- uses one policy name: `chemistry_screening`
+- receives `source_universe` and `requested_material_class` from the plan
+- frames candidates as Materials Project entries, not as a pre-baked domain class
 
 It records candidate-level fields such as:
 - `filter_passed`
 - `filter_reasons`
 - `filter_policy`
 - `filter_source`
+
+### Source Universe
+Deterministic source/backend label carried on `DiscoveryPlan`.
+
+Current values:
+- `materials_project_entries`
+- `unknown`
+
+This tells downstream reasoning what candidate universe produced the shortlist without implying user intent.
+
+### Requested Material Class
+Parser-derived label for what class of materials the user appears to want.
+
+Examples:
+- `semiconductor`
+- `amine_solvent`
+- `molecular_crystal`
+- `oxide`
+- `unknown`
+
+This is intent metadata, not a capability guarantee.
+
+### MP Filters
+Typed Materials Project search filters nested under `DiscoveryConstraints.mp_filters`.
+
+Current supported groups:
+- formula / chemical-system / material-id filters
+- species / element inclusion-exclusion filters
+- symmetry filters
+- boolean material-property filters
+- common numeric-range filters such as `band_gap`, `energy_above_hull`, `density`, `num_sites`, and `volume`
+
+Legacy compatibility aliases still exist:
+- top-level `banned_elements` -> MP `exclude_elements`
+- top-level `required_elements` -> MP `elements`
+- top-level `min_band_gap_ev` -> lower bound of MP `band_gap`
+- top-level `max_energy_above_hull` -> upper bound of MP `energy_above_hull`
+
+### Duplicate Formula Entry
+Retrieval-level collapse rule for Materials Project candidates sharing the same exact `formula_pretty`.
+
+Current behavior:
+- keep only the highest-ranked representative per exact formula
+- expose `has_multiple_entries` and `entry_count`
+- preserve only one candidate per formula in normal ranking/output
 
 ### Stability Source
 Origin of candidate stability evidence:
@@ -123,12 +168,12 @@ Current published baseline:
 - all 10 rows used MatGL path, with `fallback_count=0`
 
 ## Current Supported Scope
-- bulk inorganic candidate retrieval from Materials Project
+- Materials Project candidate retrieval
 - band-gap screening
 - optional bounded MatGL recalculation
 - optional bounded structure relaxation
 - MP-backed stability annotation with honest unknown state when MP hull data is missing
-- optional LLM-backed practical vs exploratory chemistry filtering with fail-closed validation
+- default-on LLM-backed `chemistry_screening` filtering with fail-closed validation
 - ranking and compact reporting
 - offline benchmark artifact generation
 
@@ -139,6 +184,7 @@ Current published baseline:
   - no local proxy or MatGL-based stability estimate is used.
 - Chemistry filter only covers `band_gap_screening`.
 - Chemistry filter reasons from compact metadata, not richer structure-aware features.
+- Retrieval deduplicates exact `formula_pretty`, so polymorph-level diversity is intentionally collapsed in v1.
 - Published benchmark baseline is intentionally small and only supports regression tracking for optional prediction/recalc behavior.
 - Planning remains narrow and mostly parser-plus-regex enrichment.
 - Reporting remains compact/deterministic rather than rich scientific analysis.
@@ -156,7 +202,7 @@ Current `DiscoveryWorkflow` shape:
 1. chemistry/intent agent
 2. deterministic capability guardrail using a finite task registry
 3. Materials Project retrieval
-4. optional LLM-backed `policy_filter`
+4. default-on LLM-backed `policy_filter`
 5. deterministic prediction pipeline
 6. stability evaluation
 7. reporting agent
@@ -164,7 +210,7 @@ Current `DiscoveryWorkflow` shape:
 This preserves agentic behavior where reasoning helps most, while keeping execution reproducible and debuggable.
 
 ## Bottom Line
-- Current repo is strong agentic engineering scaffold for bulk-inorganic band-gap screening.
+- Current repo is strong agentic engineering scaffold for Materials Project band-gap screening.
 - Main strengths:
   - typed contracts
   - deterministic capability admission
@@ -209,14 +255,13 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 - Reuses parser output, then enriches deterministically into `DiscoveryPlan`
 - Owns:
   - task classification
-  - practicality mode
   - ranking intent
   - selective recalculation extraction
 
 ### Constraint Parser
 - `src/matsci_agent/nlp/parser.py`
 - Lowest-level LLM parsing layer
-- Produces narrow `DiscoveryConstraints`
+- Produces typed `DiscoveryConstraints` with nested `mp_filters`
 - Also provides JSON cleanup helper reused by chemistry filter
 
 ### Capability Guardrail
@@ -228,18 +273,19 @@ This preserves agentic behavior where reasoning helps most, while keeping execut
 - `src/matsci_agent/tools/mp_retriever.py`
 - Materials Project interface plus mock fallback
 - Owns:
-  - live MP query construction
-  - client-side chemistry filtering
+  - live MP query construction from typed `mp_filters`
+  - exact-formula deduplication with duplicate metadata
   - exclude-id replenish support
   - compact candidate feature payload
 
 ### Policy Filter
 - `src/matsci_agent/tools/policy_filter.py`
-- Optional LLM-backed chemistry filter for `band_gap_screening`
+- Default-on single-policy LLM chemistry filter for `band_gap_screening`
 - Owns:
-  - strict screening-judge prompt
+  - chemistry-screening prompt
   - provider/model reuse from parser config
   - fail-closed validation
+  - hard reject guardrail for impractical elements
   - candidate-level filter provenance
 
 ### Property Predictor

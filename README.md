@@ -8,8 +8,8 @@ Production-style scaffold for retrieval-first materials screening over Materials
   - `mp_retriever` (live Materials Project + mock fallback)
   - `property_predictor` (MP band gap -> MatGL -> torch-hub -> heuristic fallback)
   - `stability_checker` (MP `energy_above_hull` annotation -> stability unknown when MP hull data is missing)
-  - `policy_filter` (optional LLM-backed chemistry filtering with strict validation and fail-closed behavior when enabled)
-- LangGraph workflow with planning, capability guardrail, retrieval, optional chemistry filtering, prediction, stability annotation, ranking, and reporting
+- `policy_filter` (default-on single LLM chemistry screen after retrieval with deterministic hard reject guardrail for impractical elements)
+- LangGraph workflow with planning, capability guardrail, retrieval, default-on chemistry filtering, prediction, stability annotation, ranking, and reporting
 - FastAPI endpoint: `POST /discover`
 - FastAPI debug trace endpoint: `POST /discover/full`
 - Optional MLflow logging for each tool/step
@@ -65,21 +65,29 @@ Endpoint roles:
 - `POST /discover`: compact annotated shortlist for normal user flow
 - `POST /discover/full`: debug/audit trace with internal workflow artifacts
 
-Enable optional chemistry filtering with:
-```bash
-export MATSCI_ENABLE_POLICY_FILTER=1
-```
-
-If the LLM chemistry filter is enabled, the same provider credentials used by the parser are also required here:
-- `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`
-- or `OPENAI_API_KEY`
+For parser + policy-filter LLM calls, configure OpenRouter:
+- `OPENROUTER_API_KEY_RAG` or `OPENROUTER_API_KEY`
+- optional `MATSCI_LLM_API_KEY_ENV` to point at a different env var name
+- optional `MATSCI_LLM_BASE_URL` (default: `https://openrouter.ai/api/v1`)
+- optional `MATSCI_NLP_MODEL` / `MATSCI_LLM_MODEL` / `MATSCI_OPENROUTER_MODEL`
+  default model: `openai/gpt-oss-120b:free`
 
 The chemistry filter:
 - only applies to `band_gap_screening`
-- is disabled by default for MVP retrieval-first flow
+- is enabled by default after retrieval
+- uses one policy name: `chemistry_screening`
+- sees `source_universe` and parser-derived `requested_material_class` in its discovery context
+- fails closed when no remote LLM provider credentials are available
 - fails closed on timeout, invalid JSON, or incomplete candidate decisions
+- always rejects candidates containing impractical/radioactive elements
 - uses one bounded replenish pass when the first kept set underfills `top_k`
 - appears in full detail through `/discover/full`, including filter decisions and provenance
+
+`DiscoveryConstraints` now supports nested typed `mp_filters` for richer `mpr.materials.summary.search(...)` intent, while keeping existing top-level aliases for compatibility:
+- `banned_elements` -> `exclude_elements`
+- `required_elements` -> `elements`
+- `min_band_gap_ev` -> `mp_filters.band_gap.min`
+- `max_energy_above_hull` -> `mp_filters.energy_above_hull.max`
 
 `POST /discover` candidate summaries include:
 - `material_id`
@@ -89,6 +97,16 @@ The chemistry filter:
 - `energy_above_hull`
 - `is_stable`
 - `stability_source`
+- `has_multiple_entries`
+- `entry_count`
+
+Retrieval deduplicates exact `formula_pretty` values from Materials Project:
+- highest-ranked representative per formula is kept
+- duplicate metadata reports whether multiple MP entries existed for that formula
+
+`DiscoveryPlan` now separates:
+- `source_universe`: deterministic backend/source truth such as `materials_project_entries`
+- `requested_material_class`: parser-derived user-intent class such as `semiconductor`, `amine_solvent`, or `unknown`
 
 ## Example Request
 ```bash
@@ -133,6 +151,23 @@ This is a provisional small-mode baseline for the optional prediction/recalc pat
 uv run pytest -q
 ```
 
+## CLI
+```bash
+uv run matsci demo "Find semiconductor materials without silicon and band gap above 2 eV"
+uv run matsci operator "Find semiconductor materials"
+uv run matsci doctor
+uv run matsci scenarios list
+uv run matsci scenarios run basic_success
+```
+
+CLI modes:
+- `matsci demo`: polished single-shot shortlist view
+- `matsci operator`: full trace/debug console over workflow output
+- `matsci doctor`: read-only environment diagnostics
+- `matsci scenarios list|run`: built-in demo presets
+
+By default the CLI runs the workflow in-process. Add `--api-url http://127.0.0.1:8000` to use the live HTTP API instead.
+
 ## Docker
 ```bash
 docker build -t matsci-agent:local .
@@ -143,26 +178,27 @@ docker run --rm -p 8000:8000 matsci-agent:local
 - Improve model-specific MatGL adapters for graph conversion edge cases.
 - Add calibrated uncertainty + DFT triage queue.
 - Enrich provenance with exact MP query IDs and model artifact versions.
-- Broaden the chemistry filter beyond current practical vs exploratory screening.
+- Broaden the chemistry filter beyond current single `chemistry_screening` prompt and compact metadata.
 
 ## Current Limitations
 - Stability is intentionally conservative:
   - MP `energy_above_hull` is used when available.
   - when MP hull data is missing, candidates are returned as stability unknown.
   - no local proxy or MatGL-based stability estimate is used.
-- Chemistry filter is optional, only applies to `band_gap_screening`, and still reasons from compact metadata.
+- Chemistry filter is default-on, only applies to `band_gap_screening`, and still reasons from compact metadata.
 - Chemistry filter reasons from compact candidate metadata, not richer structure-aware chemistry features.
+- Parser now supports a richer typed `mp_filters` surface, but many Materials Project search kwargs are still intentionally out of v1 scope.
 - Benchmark baseline currently measures optional prediction/recalc quality against MP-known band gaps, not absolute experimental truth.
 - The committed baseline is small and provisional; it is useful for regression tracking, not broad scientific validation.
 - Planning layer is still narrow: parser output plus deterministic enrichment, not a richer chemistry ontology.
 - Reporting is compact and deterministic, not a richer scientific analysis layer.
 
 ## Current Assessment
-- Good engineering scaffold for retrieval-first bulk-inorganic band-gap screening.
+- Good engineering scaffold for retrieval-first Materials Project band-gap screening.
 - Strong control-plane pieces already exist:
   - typed planning
   - deterministic capability guardrail
-  - optional LLM chemistry filtering with strict validation
+  - default-on LLM chemistry filtering with strict validation
   - bounded local model execution
   - offline benchmark tooling
 - Not yet a research-grade materials discovery system because chemistry coverage is narrow and planning/reporting remain intentionally thin.

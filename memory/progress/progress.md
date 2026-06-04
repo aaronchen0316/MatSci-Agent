@@ -9,12 +9,32 @@ Build an MVP-first materials query system that accepts natural-language research
 - `POST /discover/full` exists as a debug/audit surface, not a required normal-user endpoint.
 - `ChemistryIntentAgent` turns request text into typed planning state for downstream execution.
 - `CapabilityGuardrail` already bounds scope and refuses unsupported task classes.
-- `MPRetriever` handles Materials Project lookup or mock fallback.
-- `policy_filter` remains available as optional LLM-based post-retrieval chemistry screening and is disabled by default unless explicitly enabled.
+- `MPRetriever` now maps a typed nested `mp_filters` surface onto real `mpr.materials.summary.search(...)` kwargs and still has mock fallback behavior.
+- `policy_filter` is now default-on for `band_gap_screening` as a single LLM-based post-retrieval chemistry screen.
+- `DiscoveryPlan` now separates deterministic `source_universe` from parser-derived `requested_material_class`.
 - `PropertyPredictor`, ranking, and reporting layers exist, but repo scope already exceeds narrow MVP needs.
 - `StabilityChecker` uses MP `energy_above_hull` when available and otherwise returns honest `stability_unknown`.
 - MLflow observability is wired in, but not required for basic MVP behavior.
 - Offline benchmark tooling exists, and a provisional small baseline artifact set is now published for optional prediction/recalc regression tracking.
+- Prompt-level QA now exists for 15 materials-informatics user questions covering supported screening, edge-case execution controls, and structured refusals through both `POST /discover` and `POST /discover/full`.
+- Planner selective-recalc parsing now handles the natural phrasing `recalculate the top N candidates`.
+- Property prediction now safely falls back when selective MatGL recalc excludes a candidate that also lacks an MP band gap.
+- New `matsci` CLI now exists for presentable local/operator use:
+  - `demo` renders compact shortlist output
+  - `operator` renders full debug trace sections
+  - `doctor` runs read-only setup diagnostics
+  - `scenarios list|run` exposes built-in showcase requests
+- CLI defaults to in-process execution and can target live HTTP API with `--api-url`.
+- Policy filtering now runs by default after retrieval as one fail-closed LLM policy named `chemistry_screening`; no heuristic fallback path remains.
+- Policy filter still applies only to `band_gap_screening`, but it now uses richer discovery context including parsed `mp_filters` and candidate duplicate metadata.
+- Policy filter now frames candidates as Materials Project entries and consumes requested material class from user intent instead of old `material_class` shorthand.
+- Live retrieval now re-applies core requested element/filter semantics client-side because upstream MP server filtering can be looser than user intent.
+- Retrieval heuristics now avoid hard-coded material-class checks; class semantics stay above low-level retriever logic.
+- Retrieval now dedupes exact `formula_pretty` and surfaces `has_multiple_entries` / `entry_count` in API and CLI responses.
+- CLI `demo` and `operator` surfaces now display duplicate-entry metadata and report the new policy name.
+- Parser material-class interpretation is now LLM-owned; deterministic regex class backfills were removed so code does not carry a hard-coded materials-class list.
+- Policy screening now treats `research_goal` as authoritative, normalizes verbose LLM reasons, rejects class-mismatched molecular/salt-like high-gap entries, and runs a larger relaxed retrieval/screening pass when the first policy batch keeps zero candidates.
+- Policy-screen candidate selection now prioritizes exact requested element-set matches before high band-gap sorting, so generic Si+C requests expose SiC-like candidates to the LLM screen instead of only high-gap complex formulas.
 
 ## Biggest Current Limitation
 - Biggest current limitation is product-scope mismatch.
@@ -25,14 +45,16 @@ Build an MVP-first materials query system that accepts natural-language research
 1. Simplify and validate `POST /discover` as primary user contract.
 2. Confirm Materials Project retrieval quality for actual user query patterns.
 3. Decide whether local prediction/recalc remains part of MVP or becomes secondary.
-4. Keep optional chemistry filtering only where it clearly improves result quality for MVP use cases.
+4. Keep chemistry filtering tightly bounded to supported MVP screening tasks.
 
 ## Non-MVP Future Work
 1. Publish benchmark baselines if local prediction/recalc remains product-critical.
-2. Broaden chemistry filtering beyond current `band_gap_screening` scope and compact metadata.
+2. Broaden chemistry filtering beyond current `band_gap_screening` scope when there is a real execution path.
 3. Expand planning into richer scientific ontology if product scope broadens.
 4. Add richer external-facing reporting beyond raw `/discover/full` trace if compact output proves too thin.
 5. Expand supported task classes only when real execution paths are added.
+6. Decide whether CLI needs JSON/export modes, scenario files, or a richer TUI after operator/demo feedback.
+7. Continue validating live MP retrieval quality for edge cases where real MP values exclude expected textbook materials.
 
 ## Bottom Line
 Repository already contains a capable materials-screening scaffold, but near-term product target is narrower than current architecture.
