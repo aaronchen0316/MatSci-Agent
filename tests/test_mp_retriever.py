@@ -1,4 +1,4 @@
-from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPRetrieverInput, MPFilters
+from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPRetrieverInput, MPFilters, SearchSpaceTarget
 from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
 
 
@@ -82,6 +82,27 @@ def test_mock_retriever_honors_excluded_material_ids_and_limit_override():
     assert len(ids) == 2
     assert "mp-mock-003" not in ids
     assert "mp-mock-004" not in ids
+
+
+def test_mock_retriever_stays_within_search_space_targets():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+    payload = MPRetrieverInput(
+        research_goal="Find bounded target formulas",
+        constraints=DiscoveryConstraints(top_k=5),
+        search_space_targets=[
+            SearchSpaceTarget(
+                formula="SiC",
+                normalized_formula="SiC",
+                chemsys="C-Si",
+                elements=["C", "Si"],
+                confidence=0.9,
+            )
+        ],
+    )
+
+    out = retriever.retrieve(payload)
+
+    assert {candidate.formula for candidate in out.candidates} == {"SiC"}
 
 
 def test_client_side_filters_enforce_required_elements_subset():

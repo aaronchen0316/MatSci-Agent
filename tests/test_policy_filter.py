@@ -10,10 +10,10 @@ from matsci_agent.schemas import (
 from matsci_agent.tools.policy_filter import PolicyFilter, PolicyFilterError
 
 
-def _plan(application_intent: str, practicality_mode: str) -> DiscoveryPlan:
+def _plan(application_intent: str, practicality_mode: str, task_class: str = "band_gap_screening") -> DiscoveryPlan:
     return DiscoveryPlan(
         research_goal_raw="Find semiconductor bulk materials",
-        task_class="band_gap_screening",
+        task_class=task_class,
         parsed_constraints=DiscoveryConstraints(top_k=5),
         application_intent=application_intent,
         source_universe="materials_project_entries",
@@ -48,6 +48,26 @@ def test_policy_filter_valid_batch_response_sets_candidate_provenance():
     assert rejected["c1"].passed is False
     assert rejected["c1"].candidate.features["filter_source"] == "llm"
     assert out.provenance.output_summary["provider"] == "openrouter"
+
+
+def test_policy_filter_runs_for_generic_mp_property_screening():
+    tool = PolicyFilter(
+        inference_fn=lambda payload: {
+            "policy_name": "chemistry_screening",
+            "decisions": [
+                {"material_id": candidate["material_id"], "keep": True, "reasons": []}
+                for candidate in payload["candidates"]
+            ],
+        }
+    )
+    payload = PolicyFilterInput(
+        candidates=[Candidate(material_id="c1", formula="CsSnI3", features={"elements": ["Cs", "Sn", "I"]})],
+        discovery_plan=_plan("unknown", "unknown", task_class="mp_property_screening"),
+    )
+
+    out = tool.run(payload)
+
+    assert [candidate.material_id for candidate in out.filtered_candidates] == ["c1"]
 
 
 def test_policy_filter_payload_uses_source_universe_and_requested_material_class():

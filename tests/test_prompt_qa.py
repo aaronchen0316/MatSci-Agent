@@ -12,6 +12,8 @@ from matsci_agent.schemas import (
     DiscoveryConstraints,
     MPRetrieverInput,
     MPRetrieverOutput,
+    SearchSpaceExpansionOutput,
+    SearchSpaceTarget,
     ToolCallProvenance,
 )
 from matsci_agent.workflow.graph import DiscoveryWorkflow
@@ -147,6 +149,30 @@ class PromptQARetriever:
             },
         )
         return MPRetrieverOutput(candidates=filtered, provenance=provenance)
+
+
+class PromptQASearchExpander:
+    def expand(self, payload) -> SearchSpaceExpansionOutput:
+        formulas = ["AlN", "GaN", "Al2O3", "ZnO", "SiC", "Fe2VAl", "C3N4", "CoTi", "PbS"]
+        targets = [
+            SearchSpaceTarget(
+                formula=formula,
+                normalized_formula=formula,
+                chemsys="-".join(sorted(element.capitalize() for element in MPRetriever._extract_elements(formula))),
+                elements=sorted(element.capitalize() for element in MPRetriever._extract_elements(formula)),
+                confidence=0.9,
+                rationale="prompt qa fixture",
+            )
+            for formula in formulas[: payload.target_count]
+        ]
+        return SearchSpaceExpansionOutput(
+            targets=targets,
+            provenance=ToolCallProvenance(
+                tool_name="search_space_expander",
+                input_payload={"test": True},
+                output_summary={"target_count": len(targets)},
+            ),
+        )
 
 
 QA_CASES = [
@@ -295,6 +321,7 @@ def _qa_workflow() -> DiscoveryWorkflow:
     return DiscoveryWorkflow(
         retriever=PromptQARetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=_qa_parser),
+        search_expander=PromptQASearchExpander(),
         enable_policy_filter=False,
     )
 

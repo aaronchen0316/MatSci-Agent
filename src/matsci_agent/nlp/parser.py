@@ -432,6 +432,22 @@ class LLMConstraintParser:
         max_gap = float(max_match.group(1)) if max_match else None
         return min_gap, max_gap
 
+    @staticmethod
+    def _extract_numeric_bounds(goal: str, label_pattern: str) -> tuple[float | None, float | None]:
+        text = goal.lower()
+        min_match = re.search(
+            rf"\b(?:{label_pattern})\b.*?\b(?:above|greater than|higher than|over|at least|>=)\s*(-?\d+(?:\.\d+)?)",
+            text,
+        )
+        max_match = re.search(
+            rf"\b(?:{label_pattern})\b.*?\b(?:below|less than|lower than|under|at most|<=)\s*(-?\d+(?:\.\d+)?)",
+            text,
+        )
+        return (
+            float(min_match.group(1)) if min_match else None,
+            float(max_match.group(1)) if max_match else None,
+        )
+
     def _coerce_mp_filters(self, raw: dict[str, Any]) -> MPFilters:
         filters_raw = raw.get("mp_filters")
         if not isinstance(filters_raw, dict):
@@ -512,6 +528,21 @@ class LLMConstraintParser:
                 mp_filters.band_gap.min = extracted_min_gap
             if mp_filters.band_gap.max is None and extracted_max_gap is not None:
                 mp_filters.band_gap.max = extracted_max_gap
+        for field_name, label_pattern in {
+            "formation_energy": r"formation energy",
+            "density": r"density",
+            "volume": r"volume",
+            "energy_above_hull": r"energy above hull|hull energy",
+        }.items():
+            lower, upper = self._extract_numeric_bounds(goal, label_pattern)
+            current = getattr(mp_filters, field_name)
+            if current is None and (lower is not None or upper is not None):
+                setattr(mp_filters, field_name, FloatRange(min=lower, max=upper))
+            elif current is not None:
+                if current.min is None and lower is not None:
+                    current.min = lower
+                if current.max is None and upper is not None:
+                    current.max = upper
         parsed_top_k = self._coerce_top_k(raw.get("top_k"))
         requested_material_class = self._normalize_requested_material_class(raw.get("requested_material_class"))
         return ParsedDiscoveryIntent(

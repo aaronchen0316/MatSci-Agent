@@ -34,6 +34,7 @@ def discover(payload: DiscoveryRequest) -> DiscoverySummaryResponse:
                 stability_source=rc.stability.source,
                 has_multiple_entries=rc.candidate.has_multiple_entries,
                 entry_count=rc.candidate.entry_count,
+                properties=rc.candidate.features.get("properties", {}),
             )
             for rc in result.candidates
         ],
