@@ -171,6 +171,15 @@
 - Candidate selection for policy screening prioritizes exact requested element-set matches and simpler element sets before band-gap sorting.
 - Reason: queries such as `semiconductor materials with silicon and carbon` were showing high-gap molecular/salt-like MP entries because band-gap-first selection hid better semantic candidates from the LLM screen.
 
+## Decision 35: Add fail-closed bounded MP search-space expansion
+- Add `SearchSpaceExpansionAgent` before retrieval for supported screening requests.
+- Expansion uses the same OpenRouter config as parser and policy filter.
+- Expansion emits bounded formula targets with normalized formula, chemsys, elements, confidence, and rationale.
+- Retrieval searches exact formulas first and bounded chemsys fallback second.
+- Add `mp_property_screening` for generic MP-summary-queryable property screening; keep unsupported simulation workflows refused.
+- Generic MP-property results are MP-only and skip MatGL prediction.
+- Reason: raw user intent often lacks enough content for high-quality MP retrieval, but broad parser-only retrieval wastes calls and feeds weak candidates into fail-closed policy filtering.
+
 ## Assumptions
 - MVP means retrieval-first product, not research-grade predictor platform.
 - Existing files only; no new `memory/project.md`, no new log file.

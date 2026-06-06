@@ -58,80 +58,114 @@ class MPRetriever:
 
         limit = payload.limit_override or (payload.constraints.top_k * self.config.request_limit_multiplier)
         excluded_ids = set(payload.exclude_material_ids)
-        search_kwargs = self._build_search_kwargs(payload, limit=limit)
         effective = self._effective_filters(payload.constraints, payload.research_goal)
+        search_summaries: list[dict[str, Any]] = []
+
+        def _search(search_kwargs: dict[str, Any]) -> list[Candidate]:
+            try:
+                with MPRester(api_key) as mpr:
+                    docs = mpr.materials.summary.search(**search_kwargs)
+            except Exception:
+                raise
+            search_summaries.append(self._json_safe_search_kwargs(search_kwargs))
+            candidates: list[Candidate] = []
+            for doc in docs:
+                material_id = str(doc.material_id)
+                if material_id in excluded_ids:
+                    continue
+                formula = str(doc.formula_pretty)
+                doc_elements = {str(element).lower() for element in getattr(doc, "elements", [])}
+                elements = doc_elements or self._extract_elements(formula)
+                mp_band_gap_ev = getattr(doc, "band_gap", None)
+                mp_energy_above_hull = getattr(doc, "energy_above_hull", None)
+                generic_properties = {
+                    "formation_energy": getattr(doc, "formation_energy", None),
+                    "density": getattr(doc, "density", None),
+                    "volume": getattr(doc, "volume", None),
+                    "efermi": getattr(doc, "efermi", None),
+                    "total_magnetization": getattr(doc, "total_magnetization", None),
+                }
+                nsites = getattr(doc, "nsites", None)
+                if not self._passes_client_side_filters(
+                    effective=effective,
+                    elements=elements,
+                    mp_band_gap_ev=mp_band_gap_ev,
+                    mp_energy_above_hull=mp_energy_above_hull,
+                    nsites=nsites,
+                    is_metal=getattr(doc, "is_metal", None),
+                    theoretical=getattr(doc, "theoretical", None),
+                    deprecated=getattr(doc, "deprecated", None),
+                    generic_properties=generic_properties,
+                ):
+                    continue
+                if not self._passes_goal_semantics(
+                    goal=payload.research_goal,
+                    element_set=elements,
+                    mp_band_gap_ev=mp_band_gap_ev,
+                    min_band_gap_ev=payload.constraints.min_band_gap_ev,
+                ):
+                    continue
+                symmetry = getattr(doc, "symmetry", None)
+                candidates.append(
+                    Candidate(
+                        material_id=material_id,
+                        formula=formula,
+                        source="materials_project",
+                        features={
+                            "elements": [str(element) for element in getattr(doc, "elements", [])],
+                            "mp_band_gap_ev": mp_band_gap_ev,
+                            "mp_energy_above_hull": mp_energy_above_hull,
+                            **generic_properties,
+                            "nsites": nsites,
+                            "structure": (
+                                doc.structure.as_dict()
+                                if getattr(doc, "structure", None) is not None
+                                else None
+                            ),
+                            "is_metal": getattr(doc, "is_metal", None),
+                            "theoretical": getattr(doc, "theoretical", None),
+                            "deprecated": getattr(doc, "deprecated", None),
+                            "crystal_system": (
+                                str(getattr(symmetry, "crystal_system", "")).lower()
+                                if symmetry is not None and getattr(symmetry, "crystal_system", None) is not None
+                                else None
+                            ),
+                            "spacegroup_symbol": (
+                                getattr(symmetry, "symbol", None)
+                                if symmetry is not None
+                                else None
+                            ),
+                            "spacegroup_number": (
+                                getattr(symmetry, "number", None)
+                                if symmetry is not None
+                                else None
+                            ),
+                        },
+                    )
+                )
+            return candidates
+
         try:
-            with MPRester(api_key) as mpr:
-                docs = mpr.materials.summary.search(**search_kwargs)
+            if payload.search_space_targets:
+                formula_kwargs = self._build_search_kwargs(payload, limit=limit)
+                formula_kwargs["formula"] = [target.normalized_formula for target in payload.search_space_targets]
+                candidates = _search(formula_kwargs)
+                if len(self._dedupe_by_formula(list(candidates), limit=limit)) < payload.constraints.top_k:
+                    chemsys_values = sorted({target.chemsys for target in payload.search_space_targets if target.chemsys})
+                    if chemsys_values:
+                        chemsys_kwargs = self._build_search_kwargs(payload, limit=limit)
+                        chemsys_kwargs.pop("formula", None)
+                        chemsys_kwargs["chemsys"] = chemsys_values
+                        seen = {candidate.material_id for candidate in candidates}
+                        for candidate in _search(chemsys_kwargs):
+                            if candidate.material_id not in seen:
+                                candidates.append(candidate)
+                                seen.add(candidate.material_id)
+            else:
+                search_kwargs = self._build_search_kwargs(payload, limit=limit)
+                candidates = _search(search_kwargs)
         except Exception:
             return None
-
-        candidates: list[Candidate] = []
-        for doc in docs:
-            material_id = str(doc.material_id)
-            if material_id in excluded_ids:
-                continue
-            formula = str(doc.formula_pretty)
-            doc_elements = {str(element).lower() for element in getattr(doc, "elements", [])}
-            elements = doc_elements or self._extract_elements(formula)
-            mp_band_gap_ev = getattr(doc, "band_gap", None)
-            mp_energy_above_hull = getattr(doc, "energy_above_hull", None)
-            nsites = getattr(doc, "nsites", None)
-            if not self._passes_client_side_filters(
-                effective=effective,
-                elements=elements,
-                mp_band_gap_ev=mp_band_gap_ev,
-                mp_energy_above_hull=mp_energy_above_hull,
-                nsites=nsites,
-                is_metal=getattr(doc, "is_metal", None),
-                theoretical=getattr(doc, "theoretical", None),
-                deprecated=getattr(doc, "deprecated", None),
-            ):
-                continue
-            if not self._passes_goal_semantics(
-                goal=payload.research_goal,
-                element_set=elements,
-                mp_band_gap_ev=mp_band_gap_ev,
-                min_band_gap_ev=payload.constraints.min_band_gap_ev,
-            ):
-                continue
-            symmetry = getattr(doc, "symmetry", None)
-            candidates.append(
-                Candidate(
-                    material_id=material_id,
-                    formula=formula,
-                    source="materials_project",
-                    features={
-                        "elements": [str(element) for element in getattr(doc, "elements", [])],
-                        "mp_band_gap_ev": mp_band_gap_ev,
-                        "mp_energy_above_hull": mp_energy_above_hull,
-                        "nsites": nsites,
-                        "structure": (
-                            doc.structure.as_dict()
-                            if getattr(doc, "structure", None) is not None
-                            else None
-                        ),
-                        "is_metal": getattr(doc, "is_metal", None),
-                        "theoretical": getattr(doc, "theoretical", None),
-                        "deprecated": getattr(doc, "deprecated", None),
-                        "crystal_system": (
-                            str(getattr(symmetry, "crystal_system", "")).lower()
-                            if symmetry is not None and getattr(symmetry, "crystal_system", None) is not None
-                            else None
-                        ),
-                        "spacegroup_symbol": (
-                            getattr(symmetry, "symbol", None)
-                            if symmetry is not None
-                            else None
-                        ),
-                        "spacegroup_number": (
-                            getattr(symmetry, "number", None)
-                            if symmetry is not None
-                            else None
-                        ),
-                    },
-                )
-            )
 
         candidates.sort(key=lambda candidate: self._candidate_rank_key(candidate, payload.research_goal))
         deduped = self._dedupe_by_formula(candidates, limit=limit)
@@ -142,7 +176,9 @@ class MPRetriever:
                 "candidate_count": len(deduped),
                 "source": "materials_project",
                 "fallback_used": False,
-                "search_kwargs": self._json_safe_search_kwargs(search_kwargs),
+                "search_kwargs": search_summaries[0] if search_summaries else {},
+                "search_kwargs_sequence": search_summaries,
+                "search_space_target_count": len(payload.search_space_targets),
             },
         )
         return MPRetrieverOutput(candidates=deduped, provenance=provenance)
@@ -214,11 +250,17 @@ class MPRetriever:
         excluded_ids = set(payload.exclude_material_ids)
         limit = payload.limit_override or (payload.constraints.top_k * self.config.request_limit_multiplier)
         effective = self._effective_filters(payload.constraints, payload.research_goal)
+        target_formulas = {target.normalized_formula for target in payload.search_space_targets}
+        target_chemsys = {target.chemsys for target in payload.search_space_targets}
         filtered = []
         for candidate in mock_pool:
             if candidate.material_id in excluded_ids:
                 continue
             elements = self._extract_elements(candidate.formula)
+            if target_formulas or target_chemsys:
+                chemsys = "-".join(sorted(element.capitalize() for element in elements))
+                if candidate.formula not in target_formulas and chemsys not in target_chemsys:
+                    continue
             if effective.elements and not set(token.lower() for token in effective.elements).issubset(elements):
                 continue
             if set(token.lower() for token in effective.exclude_elements) & elements:
@@ -252,6 +294,7 @@ class MPRetriever:
                     if source == "mock_fallback_no_live_results"
                     else f"missing {self.config.api_key_env_var}, missing mp-api, or MP request error"
                 ),
+                "search_space_target_count": len(payload.search_space_targets),
             },
         )
         return MPRetrieverOutput(candidates=deduped, provenance=provenance)
@@ -265,6 +308,11 @@ class MPRetriever:
                 "elements",
                 "band_gap",
                 "energy_above_hull",
+                "formation_energy",
+                "density",
+                "volume",
+                "efermi",
+                "total_magnetization",
                 "nsites",
                 "structure",
                 "is_metal",
@@ -336,6 +384,7 @@ class MPRetriever:
         is_metal: bool | None,
         theoretical: bool | None,
         deprecated: bool | None,
+        generic_properties: dict[str, Any] | None = None,
     ) -> bool:
         required_elements = {token.lower() for token in effective.elements}
         excluded_elements = {token.lower() for token in effective.exclude_elements}
@@ -358,6 +407,15 @@ class MPRetriever:
             if effective.energy_above_hull.min is not None and float(mp_energy_above_hull) < effective.energy_above_hull.min:
                 return False
             if effective.energy_above_hull.max is not None and float(mp_energy_above_hull) > effective.energy_above_hull.max:
+                return False
+        for field_name in ["formation_energy", "density", "efermi", "total_magnetization", "volume"]:
+            range_filter = getattr(effective, field_name)
+            value = (generic_properties or {}).get(field_name)
+            if range_filter is None or value is None:
+                continue
+            if range_filter.min is not None and float(value) < range_filter.min:
+                return False
+            if range_filter.max is not None and float(value) > range_filter.max:
                 return False
         if effective.num_sites is not None and nsites is not None:
             if effective.num_sites.min is not None and int(nsites) < effective.num_sites.min:

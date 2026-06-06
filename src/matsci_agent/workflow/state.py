@@ -24,6 +24,7 @@ class DiscoveryState(TypedDict, total=False):
     filtered_candidates: list[dict[str, Any]]
     filter_records: list[dict[str, Any]]
     filter_replenish_attempts: int
+    search_space_targets: list[dict[str, Any]]
     predictions: list[dict[str, Any]]
     ranked_candidates: list[RankedCandidate]
     stable_found: bool
