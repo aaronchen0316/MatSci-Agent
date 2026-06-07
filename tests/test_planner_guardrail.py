@@ -68,3 +68,22 @@ def test_guardrail_refuses_diffusivity_task():
     assert assessment.supported is False
     assert assessment.reason_code == "unsupported_diffusivity"
     assert "Diffusivity is unsupported" in assessment.reason_message
+
+
+def test_planner_supports_generic_mp_property_screening():
+    agent = ChemistryIntentAgent(
+        parser_fn=lambda _goal: ParsedDiscoveryIntent(
+            requested_material_class="perovskite",
+            constraints=DiscoveryConstraints(),
+        )
+    )
+    plan = agent.plan(
+        "Find lead-free perovskite materials with formation energy below -1 eV.",
+        DiscoveryConstraints(),
+        explicit_base_fields=set(),
+    )
+
+    assessment = CapabilityGuardrail().assess(plan)
+
+    assert plan.task_class == "mp_property_screening"
+    assert assessment.supported is True

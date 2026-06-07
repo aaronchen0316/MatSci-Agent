@@ -6,6 +6,7 @@ from langgraph.graph import END, START, StateGraph
 
 from matsci_agent.agents.planner import ChemistryIntentAgent
 from matsci_agent.agents.reporter import ResultsReportingAgent
+from matsci_agent.agents.search_space_expander import SearchSpaceExpansionAgent, SearchSpaceExpansionError
 from matsci_agent.config import settings
 from matsci_agent.guardrails.capability import CapabilityGuardrail
 from matsci_agent.observability.mlflow_logger import MLflowLogger
@@ -20,11 +21,15 @@ from matsci_agent.schemas import (
     MPRetrieverInput,
     PolicyFilterInput,
     PolicyFilterRecord,
+    PredictedProperties,
     PropertyPredictorInput,
     PropertyPredictionRecord,
     RankedCandidate,
     ReportSummary,
+    SearchSpaceExpansionInput,
+    SearchSpaceTarget,
     StabilityCheckerInput,
+    StabilityResult,
     ToolCallProvenance,
 )
 from matsci_agent.tools.mp_retriever import MPRetriever
@@ -49,6 +54,7 @@ class DiscoveryWorkflow:
         intent_agent: ChemistryIntentAgent | None = None,
         capability_guardrail: CapabilityGuardrail | None = None,
         reporting_agent: ResultsReportingAgent | None = None,
+        search_expander: SearchSpaceExpansionAgent | None = None,
         enable_policy_filter: bool | None = None,
     ) -> None:
         self.retriever = retriever or MPRetriever()
@@ -59,6 +65,7 @@ class DiscoveryWorkflow:
         self.intent_agent = intent_agent or ChemistryIntentAgent()
         self.capability_guardrail = capability_guardrail or CapabilityGuardrail()
         self.reporting_agent = reporting_agent or ResultsReportingAgent()
+        self.search_expander = search_expander or SearchSpaceExpansionAgent()
         self.enable_policy_filter = (
             enable_policy_filter
             if enable_policy_filter is not None
@@ -70,8 +77,10 @@ class DiscoveryWorkflow:
         workflow = StateGraph(DiscoveryState)
         workflow.add_node("plan_intent", self._plan_intent)
         workflow.add_node("assess_capability", self._assess_capability)
+        workflow.add_node("expand_search_space", self._expand_search_space)
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("policy_filter", self._policy_filter)
+        workflow.add_node("summarize_mp_results", self._summarize_mp_results)
         workflow.add_node("predict", self._predict)
         workflow.add_node("check_stability", self._check_stability)
         workflow.add_node("refine", self._refine)
@@ -81,14 +90,20 @@ class DiscoveryWorkflow:
         workflow.add_conditional_edges(
             "assess_capability",
             self._route_after_capability,
-            {"continue": "retrieve", "unsupported": "report"},
+            {"continue": "expand_search_space", "unsupported": "report"},
+        )
+        workflow.add_conditional_edges(
+            "expand_search_space",
+            self._route_after_search_space_expansion,
+            {"continue": "retrieve", "stop": "report"},
         )
         workflow.add_edge("retrieve", "policy_filter")
         workflow.add_conditional_edges(
             "policy_filter",
             self._route_after_policy_filter,
-            {"continue": "predict", "stop": "report"},
+            {"predict": "predict", "mp_only": "summarize_mp_results", "stop": "report"},
         )
+        workflow.add_edge("summarize_mp_results", "report")
         workflow.add_edge("predict", "check_stability")
         workflow.add_conditional_edges(
             "check_stability",
@@ -167,9 +182,63 @@ class DiscoveryWorkflow:
             "provenance": provenance,
         }
 
+    def _expand_search_space(self, state: DiscoveryState) -> DiscoveryState:
+        plan = state["discovery_plan"]
+        target_count = min(max(state["constraints"].top_k * 3, state["constraints"].top_k), 30)
+        payload = SearchSpaceExpansionInput(
+            research_goal=state["research_goal"],
+            discovery_plan=plan,
+            target_count=target_count,
+        )
+        provenance = state.get("provenance", [])
+        messages = state.get("messages", [])
+        try:
+            result = self.search_expander.expand(payload)
+        except SearchSpaceExpansionError as exc:
+            messages.append(f"Search-space expansion failed: {exc.message}")
+            provenance.append(
+                ToolCallProvenance(
+                    tool_name="search_space_expander",
+                    input_payload=payload.model_dump(mode="json"),
+                    output_summary={
+                        "failure_code": exc.code,
+                        "raw_response_preview": exc.raw_response_preview,
+                    },
+                ).model_dump()
+            )
+            self.logger.log_step(
+                "search_space_expander",
+                metrics={"target_count": 0.0, "iteration": float(state["iteration"])},
+                params={"failure_code": exc.code},
+            )
+            return {
+                "search_space_targets": [],
+                "messages": messages,
+                "provenance": provenance,
+                "status": "failed",
+            }
+
+        self.logger.log_step(
+            "search_space_expander",
+            metrics={
+                "target_count": float(len(result.targets)),
+                "iteration": float(state["iteration"]),
+            },
+        )
+        provenance.append(result.provenance.model_dump())
+        return {
+            "search_space_targets": [target.model_dump() for target in result.targets],
+            "provenance": provenance,
+        }
+
     def _retrieve(self, state: DiscoveryState) -> DiscoveryState:
         payload = MPRetrieverInput(
-            research_goal=state["research_goal"], constraints=state["constraints"]
+            research_goal=state["research_goal"],
+            constraints=state["constraints"],
+            search_space_targets=[
+                SearchSpaceTarget.model_validate(target)
+                for target in state.get("search_space_targets", [])
+            ],
         )
         result = self.retriever.retrieve(payload)
         self.logger.log_step(
@@ -251,6 +320,10 @@ class DiscoveryWorkflow:
                     constraints=state["constraints"],
                     exclude_material_ids=sorted(seen_ids),
                     limit_override=relaxed_limit,
+                    search_space_targets=[
+                        SearchSpaceTarget.model_validate(target)
+                        for target in state.get("search_space_targets", [])
+                    ],
                 )
             )
             refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
@@ -298,6 +371,10 @@ class DiscoveryWorkflow:
                     constraints=state["constraints"],
                     exclude_material_ids=sorted(seen_ids),
                     limit_override=max(10, deficit),
+                    search_space_targets=[
+                        SearchSpaceTarget.model_validate(target)
+                        for target in state.get("search_space_targets", [])
+                    ],
                 )
             )
             refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
@@ -364,6 +441,56 @@ class DiscoveryWorkflow:
             messages.append("Chemistry filter kept zero candidates for this request.")
             next_state["status"] = "partial"
         return next_state
+
+    def _summarize_mp_results(self, state: DiscoveryState) -> DiscoveryState:
+        candidates = [
+            Candidate.model_validate(candidate)
+            for candidate in state.get("filtered_candidates", state.get("raw_candidates", []))
+        ]
+        ranked: list[RankedCandidate] = []
+        for candidate in sorted(candidates, key=self._mp_property_sort_key):
+            properties = self._candidate_properties(candidate)
+            candidate.features["properties"] = properties
+            hull = candidate.features.get("mp_energy_above_hull")
+            stability = StabilityResult(
+                energy_above_hull=float(hull) if isinstance(hull, (int, float)) else None,
+                is_stable=(
+                    float(hull) <= state["constraints"].max_energy_above_hull
+                    if isinstance(hull, (int, float))
+                    else None
+                ),
+                method="materials_project_summary_properties",
+                source="materials_project" if isinstance(hull, (int, float)) else "unknown",
+            )
+            band_gap = candidate.features.get("mp_band_gap_ev")
+            predicted = PredictedProperties(
+                band_gap_ev=float(band_gap) if isinstance(band_gap, (int, float)) else 0.0,
+                uncertainty=0.0,
+                backend="mp_summary",
+            )
+            ranked.append(
+                RankedCandidate(
+                    rank=len(ranked) + 1,
+                    candidate=candidate,
+                    predicted_properties=predicted,
+                    stability=stability,
+                    score=self._mp_property_score(candidate),
+                    provenance={"iteration": state["iteration"], "path": "mp_property_screening"},
+                )
+            )
+        provenance = state.get("provenance", [])
+        provenance.append(
+            ToolCallProvenance(
+                tool_name="mp_property_summarizer",
+                input_payload={"candidate_count": len(candidates)},
+                output_summary={"ranked_count": min(len(ranked), state["constraints"].top_k)},
+            ).model_dump()
+        )
+        return {
+            "ranked_candidates": ranked[: state["constraints"].top_k],
+            "known_stability_present": any(r.stability.is_stable is not None for r in ranked),
+            "provenance": provenance,
+        }
 
     def _predict(self, state: DiscoveryState) -> DiscoveryState:
         candidates = state.get("filtered_candidates", state.get("raw_candidates", []))
@@ -581,10 +708,18 @@ class DiscoveryWorkflow:
             return "unsupported"
         return "continue"
 
+    def _route_after_search_space_expansion(self, state: DiscoveryState) -> str:
+        if state.get("status") == "failed" and not state.get("search_space_targets"):
+            return "stop"
+        return "continue"
+
     def _route_after_policy_filter(self, state: DiscoveryState) -> str:
         if state.get("status") in {"failed", "partial"} and not state.get("filtered_candidates"):
             return "stop"
-        return "continue"
+        plan = state.get("discovery_plan")
+        if isinstance(plan, DiscoveryPlan) and plan.task_class == "mp_property_screening":
+            return "mp_only"
+        return "predict"
 
     def _route_after_stability(self, state: DiscoveryState) -> str:
         return "done"
@@ -621,6 +756,10 @@ class DiscoveryWorkflow:
             filter_records=[
                 PolicyFilterRecord.model_validate(r)
                 for r in final_state.get("filter_records", [])
+            ],
+            search_space_targets=[
+                SearchSpaceTarget.model_validate(target)
+                for target in final_state.get("search_space_targets", [])
             ],
             known_stability_present=final_state.get("known_stability_present"),
         )
@@ -698,6 +837,59 @@ class DiscoveryWorkflow:
             -completeness,
             candidate.material_id,
         )
+
+    @staticmethod
+    def _candidate_properties(candidate: Candidate) -> dict[str, object]:
+        keys = [
+            "mp_band_gap_ev",
+            "mp_energy_above_hull",
+            "formation_energy",
+            "density",
+            "volume",
+            "efermi",
+            "total_magnetization",
+            "is_metal",
+            "is_stable",
+            "theoretical",
+            "deprecated",
+            "crystal_system",
+            "spacegroup_symbol",
+            "spacegroup_number",
+            "nsites",
+        ]
+        return {
+            key: candidate.features[key]
+            for key in keys
+            if candidate.features.get(key) is not None
+        }
+
+    @staticmethod
+    def _mp_property_sort_key(candidate: Candidate) -> tuple[int, float, float, float, str]:
+        hull = candidate.features.get("mp_energy_above_hull")
+        formation = candidate.features.get("formation_energy")
+        gap = candidate.features.get("mp_band_gap_ev")
+        stable_rank = 0 if isinstance(hull, (int, float)) and float(hull) <= 0.1 else 1
+        return (
+            stable_rank,
+            float(hull) if isinstance(hull, (int, float)) else 999.0,
+            float(formation) if isinstance(formation, (int, float)) else 999.0,
+            -(float(gap) if isinstance(gap, (int, float)) else -1.0),
+            candidate.material_id,
+        )
+
+    @staticmethod
+    def _mp_property_score(candidate: Candidate) -> float:
+        hull = candidate.features.get("mp_energy_above_hull")
+        formation = candidate.features.get("formation_energy")
+        gap = candidate.features.get("mp_band_gap_ev")
+        score = 0.0
+        if isinstance(gap, (int, float)):
+            score += float(gap)
+        if isinstance(hull, (int, float)):
+            score -= 100.0 * float(hull)
+        if isinstance(formation, (int, float)):
+            score -= abs(float(formation))
+        return round(score, 4)
 
     def _select_filter_candidates(
         self,

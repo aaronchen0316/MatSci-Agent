@@ -1,6 +1,6 @@
 # MatSci-Agent
 
-Production-style scaffold for retrieval-first materials screening over Materials Project candidates.
+Production-style scaffold for retrieval-first Materials Project property screening over bounded candidate search spaces.
 
 ## Features
 - Strict Pydantic schemas for API and tool contracts
@@ -8,8 +8,9 @@ Production-style scaffold for retrieval-first materials screening over Materials
   - `mp_retriever` (live Materials Project + mock fallback)
   - `property_predictor` (MP band gap -> MatGL -> torch-hub -> heuristic fallback)
   - `stability_checker` (MP `energy_above_hull` annotation -> stability unknown when MP hull data is missing)
+- `search_space_expander` (fail-closed OpenRouter-backed formula-target expansion before retrieval)
 - `policy_filter` (default-on single LLM chemistry screen after retrieval with deterministic hard reject guardrail for impractical elements)
-- LangGraph workflow with planning, capability guardrail, retrieval, default-on chemistry filtering, prediction, stability annotation, ranking, and reporting
+- LangGraph workflow with planning, capability guardrail, search-space expansion, retrieval, default-on chemistry filtering, MP-only generic property summaries, optional band-gap prediction, stability annotation, ranking, and reporting
 - FastAPI endpoint: `POST /discover`
 - FastAPI debug trace endpoint: `POST /discover/full`
 - Optional MLflow logging for each tool/step
@@ -65,15 +66,22 @@ Endpoint roles:
 - `POST /discover`: compact annotated shortlist for normal user flow
 - `POST /discover/full`: debug/audit trace with internal workflow artifacts
 
-For parser + policy-filter LLM calls, configure OpenRouter:
+For parser + search-space expansion + policy-filter LLM calls, configure OpenRouter:
 - `OPENROUTER_API_KEY_RAG` or `OPENROUTER_API_KEY`
 - optional `MATSCI_LLM_API_KEY_ENV` to point at a different env var name
 - optional `MATSCI_LLM_BASE_URL` (default: `https://openrouter.ai/api/v1`)
 - optional `MATSCI_NLP_MODEL` / `MATSCI_LLM_MODEL` / `MATSCI_OPENROUTER_MODEL`
   default model: `openai/gpt-oss-120b:free`
 
+The search-space expander:
+- runs before retrieval for supported screening requests
+- returns bounded formula targets with normalized formula, `chemsys`, confidence, and rationale
+- defaults to `min(max(top_k * 3, top_k), 30)` targets
+- fails closed if OpenRouter is unavailable or no valid MP-compatible formula targets remain
+- appears in `/discover/full` as `search_space_targets` plus provenance
+
 The chemistry filter:
-- only applies to `band_gap_screening`
+- applies to `band_gap_screening` and `mp_property_screening`
 - is enabled by default after retrieval
 - uses one policy name: `chemistry_screening`
 - sees `source_universe` and parser-derived `requested_material_class` in its discovery context
@@ -99,6 +107,7 @@ The chemistry filter:
 - `stability_source`
 - `has_multiple_entries`
 - `entry_count`
+- `properties` for generic MP fields such as `formation_energy`, `density`, `volume`, and MP summary annotations
 
 Retrieval deduplicates exact `formula_pretty` values from Materials Project:
 - highest-ranked representative per formula is kept
@@ -178,14 +187,16 @@ docker run --rm -p 8000:8000 matsci-agent:local
 - Improve model-specific MatGL adapters for graph conversion edge cases.
 - Add calibrated uncertainty + DFT triage queue.
 - Enrich provenance with exact MP query IDs and model artifact versions.
-- Broaden the chemistry filter beyond current single `chemistry_screening` prompt and compact metadata.
+- Add richer class-aware expansion/evaluation data beyond current formula-level OpenRouter expansion and compact metadata.
 
 ## Current Limitations
 - Stability is intentionally conservative:
   - MP `energy_above_hull` is used when available.
   - when MP hull data is missing, candidates are returned as stability unknown.
   - no local proxy or MatGL-based stability estimate is used.
-- Chemistry filter is default-on, only applies to `band_gap_screening`, and still reasons from compact metadata.
+- Search-space expansion is fail-closed and depends on remote LLM credentials for supported screening runs.
+- Generic MP-property screening is MP-only and does not run MatGL property prediction.
+- Chemistry filter is default-on for `band_gap_screening` and `mp_property_screening`, and still reasons from compact metadata.
 - Chemistry filter reasons from compact candidate metadata, not richer structure-aware chemistry features.
 - Parser now supports a richer typed `mp_filters` surface, but many Materials Project search kwargs are still intentionally out of v1 scope.
 - Benchmark baseline currently measures optional prediction/recalc quality against MP-known band gaps, not absolute experimental truth.
@@ -194,7 +205,7 @@ docker run --rm -p 8000:8000 matsci-agent:local
 - Reporting is compact and deterministic, not a richer scientific analysis layer.
 
 ## Current Assessment
-- Good engineering scaffold for retrieval-first Materials Project band-gap screening.
+- Good engineering scaffold for retrieval-first Materials Project property screening.
 - Strong control-plane pieces already exist:
   - typed planning
   - deterministic capability guardrail

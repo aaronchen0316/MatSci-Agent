@@ -77,6 +77,7 @@ class DiscoveryPlan(BaseModel):
     research_goal_raw: str
     task_class: Literal[
         "band_gap_screening",
+        "mp_property_screening",
         "bulk_relaxation_only",
         "diffusivity_simulation",
         "molecular_dynamics",
@@ -147,6 +148,26 @@ class ToolCallProvenance(BaseModel):
     output_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class SearchSpaceTarget(BaseModel):
+    formula: str
+    normalized_formula: str
+    chemsys: str
+    elements: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+
+
+class SearchSpaceExpansionInput(BaseModel):
+    research_goal: str
+    discovery_plan: DiscoveryPlan
+    target_count: int = Field(default=15, ge=1, le=30)
+
+
+class SearchSpaceExpansionOutput(BaseModel):
+    targets: list[SearchSpaceTarget] = Field(default_factory=list)
+    provenance: ToolCallProvenance
+
+
 class DiscoveryResponse(BaseModel):
     research_goal: str
     constraints: DiscoveryConstraints
@@ -165,6 +186,7 @@ class DiscoveryFullResponse(DiscoveryResponse):
     raw_candidates: list[Candidate] = Field(default_factory=list)
     filtered_candidates: list[Candidate] = Field(default_factory=list)
     filter_records: list[PolicyFilterRecord] = Field(default_factory=list)
+    search_space_targets: list[SearchSpaceTarget] = Field(default_factory=list)
     known_stability_present: bool | None = None
 
 
@@ -178,6 +200,7 @@ class CandidateBandGapSummary(BaseModel):
     stability_source: str | None = None
     has_multiple_entries: bool = False
     entry_count: int = Field(default=1, ge=1)
+    properties: dict[str, Any] = Field(default_factory=dict)
 
 
 class DiscoverySummaryResponse(BaseModel):
@@ -192,6 +215,7 @@ class MPRetrieverInput(BaseModel):
     constraints: DiscoveryConstraints
     exclude_material_ids: list[str] = Field(default_factory=list)
     limit_override: int | None = Field(default=None, ge=1, le=500)
+    search_space_targets: list[SearchSpaceTarget] = Field(default_factory=list)
 
 
 class MPRetrieverOutput(BaseModel):
