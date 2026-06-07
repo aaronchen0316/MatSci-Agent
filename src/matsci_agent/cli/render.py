@@ -31,24 +31,37 @@ def render_demo(
     table.add_column("Rank", justify="right")
     table.add_column("Material")
     table.add_column("Formula")
-    table.add_column("Band Gap (eV)", justify="right")
+    if request.constraints.calculate_matgl:
+        table.add_column("MP Gap", justify="right")
+        table.add_column("MatGL Gap", justify="right")
+    else:
+        table.add_column("Band Gap (eV)", justify="right")
     table.add_column("Source")
     table.add_column("Entries", justify="right")
     table.add_column("Hull")
     table.add_column("Stable")
     table.add_column("Properties")
     for idx, candidate in enumerate(response.candidates, start=1):
-        table.add_row(
+        row = [
             str(idx),
             candidate.material_id,
             candidate.formula,
-            f"{candidate.band_gap_ev:.3f}",
+        ]
+        if request.constraints.calculate_matgl:
+            row.extend([
+                _fmt(candidate.mp_band_gap_ev),
+                _fmt(candidate.matgl_band_gap_ev),
+            ])
+        else:
+            row.append(f"{candidate.band_gap_ev:.3f}")
+        row.extend([
             candidate.band_gap_source or "-",
             str(candidate.entry_count),
             _fmt(candidate.energy_above_hull),
             _fmt(candidate.is_stable),
             _fmt_properties(candidate.properties),
-        )
+        ])
+        table.add_row(*row)
     if response.candidates:
         console.print(table)
     else:
@@ -202,22 +215,39 @@ def _render_ranked_candidates(console: Console, response: DiscoveryFullResponse)
     table.add_column("Rank", justify="right")
     table.add_column("Material")
     table.add_column("Formula")
-    table.add_column("Band Gap (eV)", justify="right")
+    if _response_uses_matgl_columns(response):
+        table.add_column("MP Gap", justify="right")
+        table.add_column("MatGL Gap", justify="right")
+    else:
+        table.add_column("Band Gap (eV)", justify="right")
     table.add_column("Backend")
     table.add_column("Entries", justify="right")
     table.add_column("Stable")
     table.add_column("Score", justify="right")
     for candidate in response.candidates:
-        table.add_row(
+        row = [
             str(candidate.rank),
             candidate.candidate.material_id,
             candidate.candidate.formula,
-            f"{candidate.predicted_properties.band_gap_ev:.3f}",
-            candidate.predicted_properties.backend,
-            str(candidate.candidate.entry_count),
-            _fmt(candidate.stability.is_stable),
-            f"{candidate.score:.3f}",
+        ]
+        if _response_uses_matgl_columns(response):
+            row.extend(
+                [
+                    _fmt(candidate.candidate.features.get("mp_band_gap_ev")),
+                    _fmt(candidate.candidate.features.get("matgl_band_gap_ev")),
+                ]
+            )
+        else:
+            row.append(f"{candidate.predicted_properties.band_gap_ev:.3f}")
+        row.extend(
+            [
+                candidate.predicted_properties.backend,
+                str(candidate.candidate.entry_count),
+                _fmt(candidate.stability.is_stable),
+                f"{candidate.score:.3f}",
+            ]
         )
+        table.add_row(*row)
     if response.candidates:
         console.print(table)
     else:
@@ -248,3 +278,9 @@ def _fmt_properties(value: object) -> str:
             continue
         parts.append(f"{key}={_fmt(item)}")
     return "; ".join(parts[:4]) if parts else "-"
+
+
+def _response_uses_matgl_columns(response: DiscoveryFullResponse) -> bool:
+    if response.discovery_plan is not None:
+        return response.discovery_plan.execution_policy.calculate_matgl
+    return response.constraints.calculate_matgl

@@ -488,6 +488,7 @@ class PropertyPredictor:
             selected_for_matgl = idx in matgl_selected_indices
 
             candidate.features.pop("matgl_skipped_reason", None)
+            candidate.features.pop("matgl_band_gap_ev", None)
             candidate.features["matgl_forced"] = bool(payload.calculate_matgl)
 
             if not needs_matgl:
@@ -525,9 +526,19 @@ class PropertyPredictor:
                     forced_matgl_count += 1
                 if predicted.backend.startswith("m3gnet_structure_fallback:"):
                     fallback_count += 1
-                    candidate.features["band_gap_source"] = "fallback"
+                    if has_mp_gap and payload.preserve_mp_gap_on_matgl_failure:
+                        predicted = PredictedProperties(
+                            band_gap_ev=float(mp_gap),
+                            uncertainty=0.4,
+                            backend="materials_project_band_gap",
+                        )
+                        used_mp_count += 1
+                        candidate.features["band_gap_source"] = "materials_project"
+                    else:
+                        candidate.features["band_gap_source"] = "fallback"
                 else:
                     used_matgl_count += 1
+                    candidate.features["matgl_band_gap_ev"] = predicted.band_gap_ev
                     candidate.features["band_gap_source"] = "matgl"
             else:
                 matgl_skipped_count += 1

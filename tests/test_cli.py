@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from rich.console import Console
 from typer.testing import CliRunner
 
-from matsci_agent.cli import doctor, transport
+from matsci_agent.cli import doctor, render, transport
 from matsci_agent.cli.main import app
 from matsci_agent.schemas import (
     CapabilityAssessment,
@@ -36,6 +37,40 @@ def test_demo_command_renders_candidates():
     assert result.exit_code == 0
     assert "MatSci Demo" in result.stdout
     assert "Candidates" in result.stdout
+
+
+def test_render_demo_shows_split_gap_columns_when_matgl_enabled():
+    console = Console(record=True, width=140)
+
+    render.render_demo(
+        console,
+        request=transport.DiscoveryRequest(
+            research_goal="Find semiconductor materials",
+            constraints=DiscoveryConstraints(calculate_matgl=True),
+        ),
+        response=DiscoverySummaryResponse(
+            status="success",
+            candidates=[
+                transport.CandidateBandGapSummary(
+                    material_id="mp-mock-003",
+                    formula="AlN",
+                    band_gap_ev=4.8,
+                    mp_band_gap_ev=5.9,
+                    matgl_band_gap_ev=4.8,
+                    band_gap_source="matgl",
+                    energy_above_hull=0.01,
+                    is_stable=True,
+                    stability_source="materials_project",
+                    entry_count=1,
+                )
+            ],
+            messages=[],
+        ),
+    )
+
+    output = console.export_text()
+    assert "MP Gap" in output
+    assert "MatGL Gap" in output
 
 
 def test_demo_command_prompts_for_goal():
@@ -91,12 +126,16 @@ def test_operator_command_renders_all_sections(monkeypatch):
                         material_id="mp-mock-003",
                         formula="AlN",
                         source="mock",
-                        features={"band_gap_source": "materials_project"},
+                        features={
+                            "band_gap_source": "matgl",
+                            "mp_band_gap_ev": 5.9,
+                            "matgl_band_gap_ev": 5.1,
+                        },
                     ),
                     predicted_properties=PredictedProperties(
-                        band_gap_ev=5.9,
+                        band_gap_ev=5.1,
                         uncertainty=0.2,
-                        backend="materials_project_band_gap",
+                        backend="matgl_band_gap:test",
                     ),
                     stability=StabilityResult(
                         energy_above_hull=0.01,
@@ -115,7 +154,12 @@ def test_operator_command_renders_all_sections(monkeypatch):
                 )
             ],
             messages=["ok"],
-            discovery_plan=DiscoveryPlan(research_goal_raw=request.research_goal, task_class="band_gap_screening"),
+            discovery_plan=DiscoveryPlan(
+                research_goal_raw=request.research_goal,
+                task_class="band_gap_screening",
+                parsed_constraints=request.constraints,
+                execution_policy={"calculate_matgl": True},
+            ),
             capability_assessment=CapabilityAssessment(supported=True),
             report_summary=ReportSummary(
                 scientific_summary="summary",
@@ -140,6 +184,64 @@ def test_operator_command_renders_all_sections(monkeypatch):
         "Messages / Caveats",
     ]:
         assert section in result.stdout
+
+
+def test_render_operator_ranked_candidates_show_split_gap_columns():
+    console = Console(record=True, width=160)
+
+    render.render_operator(
+        console,
+        response=DiscoveryFullResponse(
+            research_goal="Find semiconductor materials",
+            constraints=DiscoveryConstraints(calculate_matgl=True),
+            status="success",
+            iterations=1,
+            raw_candidates=[],
+            filtered_candidates=[],
+            filter_records=[],
+            candidates=[
+                RankedCandidate(
+                    rank=1,
+                    candidate=Candidate(
+                        material_id="mp-mock-003",
+                        formula="AlN",
+                        source="mock",
+                        features={
+                            "band_gap_source": "matgl",
+                            "mp_band_gap_ev": 5.9,
+                            "matgl_band_gap_ev": 5.1,
+                        },
+                    ),
+                    predicted_properties=PredictedProperties(
+                        band_gap_ev=5.1,
+                        uncertainty=0.2,
+                        backend="matgl_band_gap:test",
+                    ),
+                    stability=StabilityResult(
+                        energy_above_hull=0.01,
+                        is_stable=True,
+                        method="mp",
+                        source="materials_project",
+                    ),
+                    score=4.9,
+                )
+            ],
+            provenance=[],
+            messages=[],
+            discovery_plan=DiscoveryPlan(
+                research_goal_raw="Find semiconductor materials",
+                task_class="band_gap_screening",
+                parsed_constraints=DiscoveryConstraints(calculate_matgl=True),
+                execution_policy={"calculate_matgl": True},
+            ),
+            capability_assessment=CapabilityAssessment(supported=True),
+            report_summary=ReportSummary(scientific_summary="summary", execution_summary="exec", caveats=[]),
+        ),
+    )
+
+    output = console.export_text()
+    assert "MP Gap" in output
+    assert "MatGL Gap" in output
 
 
 def test_doctor_renders_status_rows(monkeypatch):
