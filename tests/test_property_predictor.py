@@ -1,3 +1,8 @@
+import builtins
+import sys
+import types
+import warnings
+
 from matsci_agent.schemas import Candidate, PropertyPredictorInput
 from matsci_agent.tools import property_predictor as predictor_module
 from matsci_agent.tools.property_predictor import PropertyPredictor
@@ -130,3 +135,97 @@ def test_predict_with_matgl_model_uses_compat_when_primary_path_fails(monkeypatc
     band_gap_ev, err = predictor_module._predict_with_matgl_model(structure={})
     assert err is None
     assert band_gap_ev == 2.35
+
+
+def test_load_matgl_bandgap_model_suppresses_known_model_version_warning(monkeypatch):
+    fake_matgl = types.ModuleType("matgl")
+
+    def fake_load_model(_name):
+        warnings.warn(
+            (
+                "Incompatible model version detected! The code will continue to load the "
+                "model but it is recommended that you provide a path to an updated model"
+            ),
+            UserWarning,
+            stacklevel=1,
+        )
+        return object()
+
+    fake_matgl.set_backend = lambda _backend: None
+    fake_matgl.load_model = fake_load_model
+
+    monkeypatch.setattr(predictor_module, "_MATGL_MODEL", None)
+    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_NAME", "")
+    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_SOURCE", "")
+    monkeypatch.setattr(predictor_module, "_MATGL_LOAD_ERROR", None)
+    monkeypatch.setattr(
+        predictor_module,
+        "_load_model_from_torch_hub",
+        lambda _candidate_name: (None, "torch_hub_skipped_for_test"),
+    )
+    monkeypatch.setattr(
+        predictor_module,
+        "_matgl_model_candidates",
+        lambda: ["models/pretrained/MEGNet-test"],
+    )
+    monkeypatch.setitem(sys.modules, "matgl", fake_matgl)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model, name, err = predictor_module._load_matgl_bandgap_model()
+
+    assert model is not None
+    assert name == "models/pretrained/MEGNet-test"
+    assert err is None
+    assert caught == []
+
+
+def test_load_matgl_bandgap_model_suppresses_known_torchdata_warning(monkeypatch):
+    fake_matgl = types.ModuleType("matgl")
+    fake_matgl.set_backend = lambda _backend: None
+    fake_matgl.load_model = lambda _name: object()
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "matgl":
+            warnings.warn(
+                (
+                    "\n################################################################################\n"
+                    "WARNING!\n"
+                    "The 'datapipes', 'dataloader2' modules are deprecated and will be removed in a\n"
+                    "future torchdata release! Please see https://github.com/pytorch/data/issues/1196\n"
+                    "to learn more and leave feedback.\n"
+                    "################################################################################\n"
+                ),
+                UserWarning,
+                stacklevel=1,
+            )
+            return fake_matgl
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(predictor_module, "_MATGL_MODEL", None)
+    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_NAME", "")
+    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_SOURCE", "")
+    monkeypatch.setattr(predictor_module, "_MATGL_LOAD_ERROR", None)
+    monkeypatch.setattr(
+        predictor_module,
+        "_load_model_from_torch_hub",
+        lambda _candidate_name: (None, "torch_hub_skipped_for_test"),
+    )
+    monkeypatch.setattr(
+        predictor_module,
+        "_matgl_model_candidates",
+        lambda: ["models/pretrained/MEGNet-test"],
+    )
+    monkeypatch.delitem(sys.modules, "matgl", raising=False)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model, name, err = predictor_module._load_matgl_bandgap_model()
+
+    assert model is not None
+    assert name == "models/pretrained/MEGNet-test"
+    assert err is None
+    assert caught == []

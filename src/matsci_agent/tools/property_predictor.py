@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import warnings
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,19 @@ _MATGL_LOAD_ERROR: str | None = None
 _MATGL_RELAXER: Any | None = None
 _MATGL_RELAXER_ERROR: str | None = None
 _DEFAULT_BANDGAP_MODEL = "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"
+
+_KNOWN_MATGL_WARNING_PATTERNS = (
+    r"(?s).*datapipes.*dataloader2.*deprecated.*",
+    r"Incompatible model version detected!.*",
+)
+
+
+@contextmanager
+def _suppress_known_matgl_warnings():
+    with warnings.catch_warnings():
+        for pattern in _KNOWN_MATGL_WARNING_PATTERNS:
+            warnings.filterwarnings("ignore", message=pattern, category=UserWarning)
+        yield
 
 
 def _heuristic_fallback(formula: str, goal: str, reason: str) -> PredictedProperties:
@@ -143,7 +158,8 @@ def _load_matgl_bandgap_model() -> tuple[Any | None, str, str | None]:
             errors.append(f"{candidate_name}:{torch_err}")
 
     try:
-        import matgl
+        with _suppress_known_matgl_warnings():
+            import matgl
     except Exception as exc:
         _MATGL_LOAD_ERROR = f"matgl_import_failed:{exc}; {'; '.join(errors)}"
         return None, "", _MATGL_LOAD_ERROR
@@ -156,7 +172,8 @@ def _load_matgl_bandgap_model() -> tuple[Any | None, str, str | None]:
                 except Exception as exc:
                     errors.append(f"{candidate_name}:set_backend_failed:{exc}")
                     continue
-            _MATGL_MODEL = matgl.load_model(candidate_name)
+            with _suppress_known_matgl_warnings():
+                _MATGL_MODEL = matgl.load_model(candidate_name)
             _MATGL_MODEL_NAME = candidate_name
             _MATGL_MODEL_SOURCE = "matgl_load_model"
             return _MATGL_MODEL, _MATGL_MODEL_NAME, None
@@ -181,7 +198,8 @@ def _predict_with_matgl_compat(model: Any, structure: Any) -> tuple[float | None
         return None, "matgl_compat_missing_model_graph_params"
 
     try:
-        from matgl.ext._pymatgen_dgl import Structure2Graph
+        with _suppress_known_matgl_warnings():
+            from matgl.ext._pymatgen_dgl import Structure2Graph
     except Exception as exc:
         return None, f"matgl_compat_graph_converter_import_failed:{exc}"
 
@@ -296,14 +314,16 @@ def _load_matgl_relaxer() -> tuple[Any | None, str | None]:
         "MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"
     ).strip()
     try:
-        import matgl
-        from matgl.ext.ase import Relaxer
+        with _suppress_known_matgl_warnings():
+            import matgl
+            from matgl.ext.ase import Relaxer
     except Exception as exc:
         _MATGL_RELAXER_ERROR = f"matgl_relax_import_failed:{exc}"
         return None, _MATGL_RELAXER_ERROR
 
     try:
-        potential = matgl.load_model(relax_model_name)
+        with _suppress_known_matgl_warnings():
+            potential = matgl.load_model(relax_model_name)
         try:
             _MATGL_RELAXER = Relaxer(potential=potential)
         except Exception:
