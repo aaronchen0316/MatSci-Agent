@@ -79,7 +79,7 @@ class MPRetriever:
                 mp_band_gap_ev = getattr(doc, "band_gap", None)
                 mp_energy_above_hull = getattr(doc, "energy_above_hull", None)
                 generic_properties = {
-                    "formation_energy": getattr(doc, "formation_energy", None),
+                    "formation_energy": getattr(doc, "formation_energy_per_atom", None),
                     "density": getattr(doc, "density", None),
                     "volume": getattr(doc, "volume", None),
                     "efermi": getattr(doc, "efermi", None),
@@ -308,7 +308,7 @@ class MPRetriever:
                 "elements",
                 "band_gap",
                 "energy_above_hull",
-                "formation_energy",
+                "formation_energy_per_atom",
                 "density",
                 "volume",
                 "efermi",

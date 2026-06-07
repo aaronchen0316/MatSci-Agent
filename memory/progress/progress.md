@@ -39,6 +39,7 @@ Build an MVP-first materials query system that accepts natural-language research
 - `mp_property_screening` is now supported for generic MP-summary-queryable filters such as formation energy, hull energy, density, volume, formula, and chemsys.
 - Retrieval now uses expansion formula targets first, then bounded chemsys fallback, instead of broad parser-only MP search for expanded requests.
 - Generic MP-property results now skip MatGL prediction and return MP summary properties through compact API/CLI output.
+- Search-space expansion now treats LLM-provided `chemsys` as advisory, computes canonical `chemsys` from formula, and retries when OpenRouter returns `{}` or omits `formula_targets`.
 
 ## Biggest Current Limitation
 - Biggest current limitation is product-scope mismatch.
