@@ -6,10 +6,14 @@ import matsci_agent.api.main as api_main
 from matsci_agent.schemas import (
     Candidate,
     DiscoveryConstraints,
+    DiscoveryPlan,
     DiscoveryRequest,
     MPRetrieverInput,
     MPRetrieverOutput,
     ParsedDiscoveryIntent,
+    PredictedProperties,
+    PropertyPredictionRecord,
+    PropertyPredictorOutput,
     SearchSpaceExpansionOutput,
     SearchSpaceTarget,
     ToolCallProvenance,
@@ -103,6 +107,8 @@ def test_discover_endpoint_returns_ranked_candidates():
             "material_id",
             "formula",
             "band_gap_ev",
+            "mp_band_gap_ev",
+            "matgl_band_gap_ev",
             "band_gap_source",
             "energy_above_hull",
             "is_stable",
@@ -113,6 +119,167 @@ def test_discover_endpoint_returns_ranked_candidates():
         }
         formulas = {candidate["formula"] for candidate in body["candidates"]}
         assert "AcF3" not in formulas
+
+
+def test_workflow_recalculates_matgl_only_for_finalized_shortlist_and_keeps_membership():
+    class FourCandidateRetriever(MPRetriever):
+        def __init__(self):
+            super().__init__(MPRetrieverConfig(use_live_if_available=False))
+
+        def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
+            candidates = [
+                Candidate(
+                    material_id="mp-1",
+                    formula="A1B1O3",
+                    source="mock",
+                    features={"mp_band_gap_ev": 5.0, "mp_energy_above_hull": 0.01, "nsites": 5},
+                ),
+                Candidate(
+                    material_id="mp-2",
+                    formula="A2B2O3",
+                    source="mock",
+                    features={"mp_band_gap_ev": 4.0, "mp_energy_above_hull": 0.02, "nsites": 5},
+                ),
+                Candidate(
+                    material_id="mp-3",
+                    formula="A3B3O3",
+                    source="mock",
+                    features={"mp_band_gap_ev": 3.0, "mp_energy_above_hull": 0.03, "nsites": 5},
+                ),
+                Candidate(
+                    material_id="mp-4",
+                    formula="A4B4O3",
+                    source="mock",
+                    features={"mp_band_gap_ev": 2.5, "mp_energy_above_hull": 0.04, "nsites": 5},
+                ),
+            ]
+            return MPRetrieverOutput(
+                candidates=candidates,
+                provenance=ToolCallProvenance(
+                    tool_name="four_candidate_retriever",
+                    input_payload=payload.model_dump(mode="json"),
+                    output_summary={"candidate_count": len(candidates)},
+                ),
+            )
+
+    class RecordingPredictor:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def run(self, payload) -> PropertyPredictorOutput:
+            ids = [candidate.material_id for candidate in payload.candidates]
+            self.calls.append(
+                {
+                    "calculate_matgl": payload.calculate_matgl,
+                    "candidate_ids": ids,
+                }
+            )
+            predictions = []
+            matgl_by_id = {"mp-1": 2.4, "mp-2": 1.1}
+            for candidate in payload.candidates:
+                cloned = candidate.model_copy(deep=True)
+                gap = matgl_by_id[candidate.material_id]
+                cloned.features["matgl_band_gap_ev"] = gap
+                cloned.features["band_gap_source"] = "matgl"
+                predictions.append(
+                    PropertyPredictionRecord(
+                        candidate=cloned,
+                        predicted=PredictedProperties(
+                            band_gap_ev=gap,
+                            uncertainty=1.0,
+                            backend="matgl_band_gap:test",
+                        ),
+                    )
+                )
+            return PropertyPredictorOutput(
+                predictions=predictions,
+                provenance=ToolCallProvenance(
+                    tool_name="property_predictor",
+                    input_payload={"candidate_ids": ids},
+                    output_summary={
+                        "backend": "hybrid_mp_then_matgl",
+                        "prediction_count": len(predictions),
+                        "used_matgl_count": len(predictions),
+                    },
+                ),
+            )
+
+    predictor = RecordingPredictor()
+    wf = DiscoveryWorkflow(
+        retriever=FourCandidateRetriever(),
+        predictor=predictor,
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(
+                requested_material_class="perovskite",
+                constraints=DiscoveryConstraints(calculate_matgl=True, top_k=2, min_band_gap_ev=2.0),
+            )
+        ),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "chemistry_screening",
+                "decisions": [
+                    {"material_id": candidate["material_id"], "keep": True, "reasons": []}
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+        search_expander=FakeSearchExpander(["A1B1O3", "A2B2O3", "A3B3O3", "A4B4O3"]),
+        enable_policy_filter=True,
+    )
+    req = DiscoveryRequest(
+        research_goal="Find perovskites with band gap above 2 eV",
+        constraints=DiscoveryConstraints(calculate_matgl=True, top_k=2, min_band_gap_ev=2.0),
+    )
+
+    out = wf.run(req)
+
+    assert predictor.calls == [
+        {"calculate_matgl": True, "candidate_ids": ["mp-1", "mp-2"]},
+    ]
+    assert [candidate.candidate.material_id for candidate in out.candidates] == ["mp-1", "mp-2"]
+    assert out.candidates[0].predicted_properties.band_gap_ev == 2.4
+    assert out.candidates[1].predicted_properties.band_gap_ev == 1.1
+
+
+def test_discover_endpoint_exposes_mp_and_matgl_gap_fields():
+    workflow = DiscoveryWorkflow(
+        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(
+                requested_material_class="semiconductor",
+                constraints=DiscoveryConstraints(calculate_matgl=True, top_k=1, min_band_gap_ev=2.0),
+            )
+        ),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "practical_screening",
+                "decisions": [
+                    {
+                        "material_id": candidate["material_id"],
+                        "keep": candidate["material_id"] == "mp-mock-003",
+                        "reasons": [],
+                    }
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+        search_expander=FakeSearchExpander(["AlN"]),
+        enable_policy_filter=True,
+    )
+    api_main.workflow = workflow
+
+    res = client.post(
+        "/discover",
+        json={
+            "research_goal": "Find semiconductor materials without silicon and band gap above 2 eV",
+            "constraints": {"calculate_matgl": True, "top_k": 1, "min_band_gap_ev": 2.0},
+        },
+    )
+
+    assert res.status_code == 200
+    first = res.json()["candidates"][0]
+    assert "mp_band_gap_ev" in first
+    assert "matgl_band_gap_ev" in first
 
 
 def test_workflow_can_still_skip_policy_filter_when_explicitly_disabled():

@@ -194,6 +194,8 @@ class CandidateBandGapSummary(BaseModel):
     material_id: str
     formula: str
     band_gap_ev: float = Field(ge=0)
+    mp_band_gap_ev: float | None = Field(default=None, ge=0)
+    matgl_band_gap_ev: float | None = Field(default=None, ge=0)
     band_gap_source: str | None = None
     energy_above_hull: float | None = None
     is_stable: bool | None = None
@@ -256,6 +258,7 @@ class PropertyPredictorInput(BaseModel):
     candidates: list[Candidate]
     goal: str
     calculate_matgl: bool = False
+    preserve_mp_gap_on_matgl_failure: bool = False
     recalculate_top_n: int | None = Field(default=None, ge=1, le=100)
     matgl_max_recalc_entries: int = Field(default=10, ge=1, le=100)
     matgl_max_atoms: int = Field(default=50, ge=1, le=500)

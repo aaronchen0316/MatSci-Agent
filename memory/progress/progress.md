@@ -41,6 +41,7 @@ Build an MVP-first materials query system that accepts natural-language research
 - Generic MP-property results now skip MatGL prediction and return MP summary properties through compact API/CLI output.
 - Search-space expansion now treats LLM-provided `chemsys` as advisory, computes canonical `chemsys` from formula, and retries when OpenRouter returns `{}` or omits `formula_targets`.
 - MatGL integration now suppresses known third-party load-time warnings (`torchdata` deprecation banner and old-checkpoint `@model_version` banner) so `matsci demo --calculate-matgl` stays clean while retaining compatibility fallback behavior.
+- Band-gap screening with `calculate_matgl` now finalizes MP shortlist membership before running MatGL, reranks only shortlisted rows by recalculated gap, preserves MP membership on MatGL failure, and exposes separate `mp_band_gap_ev` / `matgl_band_gap_ev` fields in compact API and CLI output.
 
 ## Biggest Current Limitation
 - Biggest current limitation is product-scope mismatch.

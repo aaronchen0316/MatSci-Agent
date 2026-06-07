@@ -493,18 +493,25 @@ class DiscoveryWorkflow:
         }
 
     def _predict(self, state: DiscoveryState) -> DiscoveryState:
-        candidates = state.get("filtered_candidates", state.get("raw_candidates", []))
+        candidates = [
+            Candidate.model_validate(c)
+            for c in state.get("filtered_candidates", state.get("raw_candidates", []))
+        ]
         plan = state.get("discovery_plan")
         if isinstance(plan, DiscoveryPlan):
             policy = plan.execution_policy
         else:
             policy = None
+        calculate_matgl = (
+            policy.calculate_matgl if policy is not None else state["constraints"].calculate_matgl
+        )
+        if calculate_matgl:
+            candidates = self._finalize_mp_shortlist_candidates(candidates, state)
         payload = PropertyPredictorInput(
-            candidates=[Candidate.model_validate(c) for c in candidates],
+            candidates=candidates,
             goal=state["research_goal"],
-            calculate_matgl=(
-                policy.calculate_matgl if policy is not None else state["constraints"].calculate_matgl
-            ),
+            calculate_matgl=calculate_matgl,
+            preserve_mp_gap_on_matgl_failure=calculate_matgl,
             recalculate_top_n=(policy.recalculate_top_n if policy is not None else None),
             matgl_max_recalc_entries=(
                 policy.matgl_max_recalc_entries
@@ -552,42 +559,12 @@ class DiscoveryWorkflow:
             constraints=state["constraints"],
         )
         result = self.stability_checker.run(payload)
-        min_band_gap_ev = state["constraints"].min_band_gap_ev
-
-        ranked: list[RankedCandidate] = []
-        for rec in sorted(
+        ranked = self._rank_stability_records(
             result.records,
-            key=lambda x: (
-                -x.predicted.band_gap_ev,
-                0 if x.stability.is_stable is True else 1 if x.stability.is_stable is None else 2,
-                (
-                    x.stability.energy_above_hull
-                    if x.stability.energy_above_hull is not None
-                    else 999.0
-                ),
-            ),
-        ):
-            if (
-                min_band_gap_ev is not None
-                and rec.predicted.band_gap_ev < min_band_gap_ev
-            ):
-                continue
-            hull_penalty = (
-                100.0 * rec.stability.energy_above_hull
-                if rec.stability.energy_above_hull is not None
-                else 0.0
-            )
-            score = rec.predicted.band_gap_ev - hull_penalty
-            ranked.append(
-                RankedCandidate(
-                    rank=len(ranked) + 1,
-                    candidate=rec.candidate,
-                    predicted_properties=rec.predicted,
-                    stability=rec.stability,
-                    score=round(score, 4),
-                    provenance={"iteration": state["iteration"]},
-                )
-            )
+            constraints=state["constraints"],
+            iteration=state["iteration"],
+            apply_min_band_gap_filter=not self._matgl_enabled(state),
+        )
 
         stable_found = any(r.stability.is_stable is True for r in ranked)
         known_stability_present = any(r.stability.is_stable is not None for r in ranked)
@@ -801,6 +778,95 @@ class DiscoveryWorkflow:
             capability_assessment=final_state.get("capability_assessment"),
             report_summary=final_state.get("report_summary"),
         )
+
+    def _matgl_enabled(self, state: DiscoveryState) -> bool:
+        plan = state.get("discovery_plan")
+        if isinstance(plan, DiscoveryPlan):
+            return plan.execution_policy.calculate_matgl
+        return state["constraints"].calculate_matgl
+
+    def _finalize_mp_shortlist_candidates(
+        self,
+        candidates: list[Candidate],
+        state: DiscoveryState,
+    ) -> list[Candidate]:
+        if not candidates:
+            return []
+
+        baseline_predictions = [
+            PropertyPredictionRecord(
+                candidate=candidate.model_copy(deep=True),
+                predicted=PredictedProperties(
+                    band_gap_ev=float(candidate.features.get("mp_band_gap_ev") or 0.0),
+                    uncertainty=0.2 if candidate.features.get("mp_band_gap_ev") is not None else 1.0,
+                    backend=(
+                        "materials_project_band_gap"
+                        if candidate.features.get("mp_band_gap_ev") is not None
+                        else "materials_project_band_gap_missing"
+                    ),
+                ),
+            )
+            for candidate in candidates
+        ]
+        stability_result = self.stability_checker.run(
+            StabilityCheckerInput(
+                predictions=baseline_predictions,
+                constraints=state["constraints"],
+            )
+        )
+        ranked = self._rank_stability_records(
+            stability_result.records,
+            constraints=state["constraints"],
+            iteration=state["iteration"],
+            apply_min_band_gap_filter=False,
+        )
+        return [candidate.candidate for candidate in ranked[: state["constraints"].top_k]]
+
+    @staticmethod
+    def _rank_stability_records(
+        records,
+        *,
+        constraints: DiscoveryConstraints,
+        iteration: int,
+        apply_min_band_gap_filter: bool,
+    ) -> list[RankedCandidate]:
+        ranked: list[RankedCandidate] = []
+        min_band_gap_ev = constraints.min_band_gap_ev
+        for rec in sorted(
+            records,
+            key=lambda x: (
+                -x.predicted.band_gap_ev,
+                0 if x.stability.is_stable is True else 1 if x.stability.is_stable is None else 2,
+                (
+                    x.stability.energy_above_hull
+                    if x.stability.energy_above_hull is not None
+                    else 999.0
+                ),
+            ),
+        ):
+            if (
+                apply_min_band_gap_filter
+                and min_band_gap_ev is not None
+                and rec.predicted.band_gap_ev < min_band_gap_ev
+            ):
+                continue
+            hull_penalty = (
+                100.0 * rec.stability.energy_above_hull
+                if rec.stability.energy_above_hull is not None
+                else 0.0
+            )
+            score = rec.predicted.band_gap_ev - hull_penalty
+            ranked.append(
+                RankedCandidate(
+                    rank=len(ranked) + 1,
+                    candidate=rec.candidate,
+                    predicted_properties=rec.predicted,
+                    stability=rec.stability,
+                    score=round(score, 4),
+                    provenance={"iteration": iteration},
+                )
+            )
+        return ranked
 
     @staticmethod
     def _cheap_candidate_sort_key(

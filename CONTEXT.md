@@ -9,9 +9,9 @@ MatSci-Agent is an agentic materials-screening system for Materials Project entr
 - Orchestration: LangGraph workflow
 - Retrieval source: Materials Project
 - Primary target properties: MP summary fields such as `band_gap`, `formation_energy`, `energy_above_hull`, `density`, and `volume`
-- Property policy: prefer MP values; use local MatGL only for band-gap values when data is missing or recalculation is explicitly requested
+- Property policy: MP retrieval and policy filtering decide shortlist membership; optional MatGL recalculation runs only on finalized band-gap shortlist rows and affects final ranking/display, not membership
 - Stability policy: use MP `energy_above_hull` when available, otherwise mark stability unknown
-- Candidate selection policy: fail-closed LLM-backed `Search Space Expansion` before retrieval, then default-on LLM-backed chemistry `policy_filter` after retrieval, with deterministic hard reject guardrail for impractical elements and one bounded replenish pass for band-gap screening
+- Candidate selection policy: fail-closed LLM-backed `Search Space Expansion` before retrieval, then default-on LLM-backed chemistry `policy_filter` after retrieval, with deterministic hard reject guardrail for impractical elements and one bounded replenish pass before finalizing the MP shortlist for band-gap screening
 - Evaluation path: offline band-gap benchmark tooling against MP-known entries
 
 ## Core Terms
@@ -156,6 +156,16 @@ Current behavior:
 - expose `has_multiple_entries` and `entry_count`
 - preserve only one candidate per formula in normal ranking/output
 
+### Finalized Shortlist
+The bounded post-filter candidate set that is fixed before optional expensive recalculation.
+
+Current behavior for `band_gap_screening`:
+- broad MP retrieval first
+- policy filter screens a bounded batch and may run one bounded replenish pass
+- shortlist membership is then fixed at `top_k`
+- optional MatGL recalculation runs only on that fixed shortlist
+- MatGL may rerank shortlisted rows but does not add, remove, or replenish candidates
+
 ### Stability Source
 Origin of candidate stability evidence:
 - `materials_project`
@@ -218,10 +228,11 @@ Current `DiscoveryWorkflow` shape:
 2. deterministic capability guardrail using a finite task registry
 3. fail-closed search-space expansion
 4. Materials Project retrieval
-5. default-on LLM-backed `policy_filter`
-6. MP-only summarization for generic MP-property screening, or deterministic prediction pipeline for band-gap screening
-7. stability evaluation for band-gap screening
-8. reporting agent
+5. default-on LLM-backed `policy_filter`, including one bounded replenish pass when underfilled
+6. finalize MP-based shortlist membership for band-gap screening
+7. MP-only summarization for generic MP-property screening, or optional MatGL recalculation only on finalized shortlist rows for band-gap screening
+8. stability evaluation for band-gap screening
+9. reporting agent
 
 This preserves agentic behavior where reasoning helps most, while keeping execution reproducible and debuggable.
 

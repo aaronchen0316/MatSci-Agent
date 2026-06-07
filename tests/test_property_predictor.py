@@ -116,6 +116,35 @@ def test_predictor_selective_recalc_falls_back_for_unselected_missing_mp_gap():
     assert by_id["mp-3"].predicted.backend.startswith("m3gnet_structure_fallback:")
 
 
+def test_predictor_preserves_mp_gap_when_matgl_fails_on_finalized_shortlist(monkeypatch):
+    monkeypatch.setattr(
+        predictor_module,
+        "structure_predict_m3gnet",
+        lambda **_kwargs: predictor_module.PredictedProperties(
+            band_gap_ev=0.8,
+            uncertainty=6.0,
+            backend="m3gnet_structure_fallback:missing_structure",
+        ),
+    )
+    predictor = PropertyPredictor()
+    payload = PropertyPredictorInput(
+        candidates=[
+            Candidate(material_id="mp-1", formula="AlN", features={"mp_band_gap_ev": 5.7, "nsites": 8}),
+        ],
+        goal="recalculate shortlisted candidate",
+        calculate_matgl=True,
+        preserve_mp_gap_on_matgl_failure=True,
+    )
+
+    out = predictor.run(payload)
+
+    prediction = out.predictions[0]
+    assert prediction.predicted.band_gap_ev == 5.7
+    assert prediction.predicted.backend == "materials_project_band_gap"
+    assert prediction.candidate.features["band_gap_source"] == "materials_project"
+    assert prediction.candidate.features.get("matgl_band_gap_ev") is None
+
+
 def test_predict_with_matgl_model_uses_compat_when_primary_path_fails(monkeypatch):
     class BrokenModel:
         def predict_structure(self, _structure):
