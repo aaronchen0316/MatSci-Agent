@@ -108,7 +108,7 @@ class PolicyFilter:
         )
 
     def run(self, payload: PolicyFilterInput) -> PolicyFilterOutput:
-        if payload.discovery_plan.task_class != "band_gap_screening":
+        if payload.discovery_plan.task_class not in {"band_gap_screening", "mp_property_screening"}:
             return self.skip(payload, policy="skipped_non_band_gap_task")
 
         raw = self._call_llm(payload)
@@ -352,7 +352,7 @@ class PolicyFilter:
             "reject salt-like, phosphate/silicate/carbonate-like, hydrate/organic-ligand-rich, or molecular formulas unless the "
             "research_goal explicitly asks for that chemistry.\n"
             "Always reject candidates containing any listed impractical elements.\n"
-            "For other candidates, keep only candidates that match the user-requested material concept and constraints.\n"
+            "For other candidates, keep only candidates that match the user-requested material concept, MP property filters, and constraints.\n"
             "Return exactly this shape: "
             "{\"policy_name\":\"chemistry_screening\",\"decisions\":[{\"material_id\":\"...\",\"keep\":true,\"reasons\":[\"...\"]}]}\n"
             "Reasons must be short plain strings.\n"

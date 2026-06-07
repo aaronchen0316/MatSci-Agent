@@ -10,6 +10,8 @@ from matsci_agent.schemas import (
     MPRetrieverInput,
     MPRetrieverOutput,
     ParsedDiscoveryIntent,
+    SearchSpaceExpansionOutput,
+    SearchSpaceTarget,
     ToolCallProvenance,
 )
 from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
@@ -18,6 +20,32 @@ from matsci_agent.workflow.graph import DiscoveryWorkflow
 
 
 client = TestClient(app)
+
+
+class FakeSearchExpander:
+    def __init__(self, formulas: list[str] | None = None) -> None:
+        self.formulas = formulas or ["AlN", "Fe2VAl", "CoTi", "O2", "AcF3", "SiC"]
+
+    def expand(self, payload) -> SearchSpaceExpansionOutput:
+        targets = [
+            SearchSpaceTarget(
+                formula=formula,
+                normalized_formula=formula,
+                chemsys="-".join(sorted(MPRetriever._extract_elements(formula))),
+                elements=sorted(element.capitalize() for element in MPRetriever._extract_elements(formula)),
+                confidence=0.9,
+                rationale="test fixture",
+            )
+            for formula in self.formulas[: payload.target_count]
+        ]
+        return SearchSpaceExpansionOutput(
+            targets=targets,
+            provenance=ToolCallProvenance(
+                tool_name="search_space_expander",
+                input_payload={"test": True},
+                output_summary={"target_count": len(targets)},
+            ),
+        )
 
 
 def test_health():
@@ -51,6 +79,7 @@ def test_discover_endpoint_returns_ranked_candidates():
                 ],
             }
         ),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     api_main.workflow = workflow
@@ -80,6 +109,7 @@ def test_discover_endpoint_returns_ranked_candidates():
             "stability_source",
             "has_multiple_entries",
             "entry_count",
+            "properties",
         }
         formulas = {candidate["formula"] for candidate in body["candidates"]}
         assert "AcF3" not in formulas
@@ -91,6 +121,7 @@ def test_workflow_can_still_skip_policy_filter_when_explicitly_disabled():
         intent_agent=ChemistryIntentAgent(
             parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
         ),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=False,
     )
     req = DiscoveryRequest(
@@ -124,7 +155,7 @@ def test_workflow_defaults_to_policy_filter_fails_closed_without_llm_credentials
     out = wf.run(req)
 
     assert out.status == "failed"
-    assert any("Chemistry filter failed" in message for message in out.messages)
+    assert any("Search-space expansion failed" in message for message in out.messages)
 
 
 def test_discover_endpoint_refuses_unsupported_diffusivity_request():
@@ -159,6 +190,7 @@ def test_discover_full_endpoint_returns_debug_trace():
                 ],
             }
         ),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     api_main.workflow = workflow
@@ -174,6 +206,7 @@ def test_discover_full_endpoint_returns_debug_trace():
     assert "raw_candidates" in body
     assert "filtered_candidates" in body
     assert "filter_records" in body
+    assert "search_space_targets" in body
     assert "candidates" in body
     assert "messages" in body
     assert "provenance" in body
@@ -186,6 +219,68 @@ def test_discover_full_endpoint_returns_debug_trace():
     assert body["raw_candidates"]
     assert body["filtered_candidates"]
     assert body["filter_records"]
+
+
+def test_discover_endpoint_returns_generic_mp_properties():
+    class GenericRetriever(MPRetriever):
+        def __init__(self):
+            super().__init__(MPRetrieverConfig(use_live_if_available=False))
+
+        def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
+            candidates = [
+                Candidate(
+                    material_id="mp-cs-sni3",
+                    formula="CsSnI3",
+                    source="mock",
+                    features={
+                        "elements": ["Cs", "Sn", "I"],
+                        "formation_energy": -1.2,
+                        "mp_energy_above_hull": 0.03,
+                        "mp_band_gap_ev": 1.3,
+                        "nsites": 5,
+                    },
+                )
+            ]
+            return MPRetrieverOutput(
+                candidates=candidates,
+                provenance=ToolCallProvenance(
+                    tool_name="generic_retriever",
+                    input_payload=payload.model_dump(mode="json"),
+                    output_summary={"candidate_count": len(candidates)},
+                ),
+            )
+
+    workflow = DiscoveryWorkflow(
+        retriever=GenericRetriever(),
+        intent_agent=ChemistryIntentAgent(
+            parser_fn=lambda _goal: ParsedDiscoveryIntent(
+                requested_material_class="perovskite",
+                constraints=DiscoveryConstraints(),
+            )
+        ),
+        policy_filter=PolicyFilter(
+            inference_fn=lambda payload: {
+                "policy_name": "chemistry_screening",
+                "decisions": [
+                    {"material_id": candidate["material_id"], "keep": True, "reasons": []}
+                    for candidate in payload["candidates"]
+                ],
+            }
+        ),
+        search_expander=FakeSearchExpander(["CsSnI3"]),
+        enable_policy_filter=True,
+    )
+    api_main.workflow = workflow
+
+    res = client.post(
+        "/discover",
+        json={"research_goal": "Find lead-free perovskite materials with formation energy below -1 eV."},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "success"
+    assert body["candidates"][0]["properties"]["formation_energy"] == -1.2
 
 
 def test_discover_full_includes_capability_assessment_for_unsupported_request():
@@ -210,6 +305,7 @@ def test_discover_full_shows_filter_failure_trace():
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     api_main.workflow = workflow
@@ -258,6 +354,7 @@ def test_workflow_replenishes_once_when_first_filter_batch_underfills():
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=_filter),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     req = DiscoveryRequest(
@@ -328,6 +425,7 @@ def test_workflow_relaxes_retrieval_limit_when_first_filter_batch_has_zero_passe
             parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
         ),
         policy_filter=PolicyFilter(inference_fn=_filter),
+        search_expander=FakeSearchExpander(["SiC", "SiCH"]),
         enable_policy_filter=True,
     )
     req = DiscoveryRequest(
@@ -369,6 +467,7 @@ def test_workflow_fails_closed_when_filter_returns_invalid_json():
         retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     req = DiscoveryRequest(
@@ -405,6 +504,7 @@ def test_workflow_unknown_stability_does_not_trigger_refine():
                 ],
             }
         ),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     req = DiscoveryRequest(
@@ -440,6 +540,7 @@ def test_workflow_returns_stability_annotations_in_ranked_candidates():
                 ],
             }
         ),
+        search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
     req = DiscoveryRequest(

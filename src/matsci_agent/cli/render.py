@@ -36,6 +36,7 @@ def render_demo(
     table.add_column("Entries", justify="right")
     table.add_column("Hull")
     table.add_column("Stable")
+    table.add_column("Properties")
     for idx, candidate in enumerate(response.candidates, start=1):
         table.add_row(
             str(idx),
@@ -46,6 +47,7 @@ def render_demo(
             str(candidate.entry_count),
             _fmt(candidate.energy_above_hull),
             _fmt(candidate.is_stable),
+            _fmt_properties(candidate.properties),
         )
     if response.candidates:
         console.print(table)
@@ -87,6 +89,7 @@ def render_operator(
         )
     _render_candidate_table(console, "Raw Candidates", response.raw_candidates)
     _render_candidate_table(console, "Filtered Candidates", response.filtered_candidates)
+    _render_search_space_targets(console, response.search_space_targets)
     _render_filter_records(console, response.filter_records)
     _render_ranked_candidates(console, response)
     console.print(
@@ -136,6 +139,7 @@ def _render_candidate_table(console: Console, title: str, candidates: list) -> N
     table.add_column("MP Gap")
     table.add_column("Hull")
     table.add_column("Sites")
+    table.add_column("Properties")
     for candidate in candidates:
         table.add_row(
             candidate.material_id,
@@ -145,11 +149,31 @@ def _render_candidate_table(console: Console, title: str, candidates: list) -> N
             _fmt(candidate.features.get("mp_band_gap_ev")),
             _fmt(candidate.features.get("mp_energy_above_hull")),
             _fmt(candidate.features.get("nsites")),
+            _fmt_properties(candidate.features.get("properties", {})),
         )
     if candidates:
         console.print(table)
     else:
         console.print(Panel.fit("None", title=title))
+
+
+def _render_search_space_targets(console: Console, targets: list) -> None:
+    table = Table(title="Search Space Targets")
+    table.add_column("Formula")
+    table.add_column("Chemsys")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Rationale")
+    for target in targets:
+        table.add_row(
+            target.normalized_formula,
+            target.chemsys,
+            f"{target.confidence:.2f}",
+            target.rationale or "-",
+        )
+    if targets:
+        console.print(table)
+    else:
+        console.print(Panel.fit("None", title="Search Space Targets"))
 
 
 def _render_filter_records(console: Console, records: list) -> None:
@@ -213,3 +237,14 @@ def _fmt(value: object) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _fmt_properties(value: object) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    parts = []
+    for key, item in value.items():
+        if item is None:
+            continue
+        parts.append(f"{key}={_fmt(item)}")
+    return "; ".join(parts[:4]) if parts else "-"

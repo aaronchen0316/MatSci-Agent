@@ -96,7 +96,36 @@ class ChemistryIntentAgent:
             or constraints.min_band_gap_ev is not None
         ):
             return "band_gap_screening"
+        if ChemistryIntentAgent._has_mp_summary_screening_intent(text, constraints):
+            return "mp_property_screening"
         return "unknown_task"
+
+    @staticmethod
+    def _has_mp_summary_screening_intent(text: str, constraints: DiscoveryConstraints) -> bool:
+        if re.search(
+            r"\b("
+            r"formation energy|energy above hull|hull energy|density|volume|stable|stability|"
+            r"formula|formulas|chemical system|chemsys|perovskite|oxide|halide|nitride|carbide|"
+            r"mp property|materials project"
+            r")\b",
+            text,
+        ):
+            return True
+        filters = constraints.mp_filters
+        return any(
+            [
+                filters.formula is not None,
+                filters.chemsys is not None,
+                filters.material_ids is not None,
+                bool(filters.elements),
+                bool(filters.exclude_elements),
+                filters.formation_energy is not None,
+                filters.density is not None,
+                filters.volume is not None,
+                filters.energy_above_hull is not None,
+                filters.is_stable is not None,
+            ]
+        )
 
     @staticmethod
     def _infer_application_intent(goal: str) -> str:

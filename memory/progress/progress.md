@@ -35,6 +35,12 @@ Build an MVP-first materials query system that accepts natural-language research
 - Parser material-class interpretation is now LLM-owned; deterministic regex class backfills were removed so code does not carry a hard-coded materials-class list.
 - Policy screening now treats `research_goal` as authoritative, normalizes verbose LLM reasons, rejects class-mismatched molecular/salt-like high-gap entries, and runs a larger relaxed retrieval/screening pass when the first policy batch keeps zero candidates.
 - Policy-screen candidate selection now prioritizes exact requested element-set matches before high band-gap sorting, so generic Si+C requests expose SiC-like candidates to the LLM screen instead of only high-gap complex formulas.
+- Search-space expansion now runs before retrieval for supported screening tasks and fails closed if it cannot produce valid MP-compatible formula targets.
+- `mp_property_screening` is now supported for generic MP-summary-queryable filters such as formation energy, hull energy, density, volume, formula, and chemsys.
+- Retrieval now uses expansion formula targets first, then bounded chemsys fallback, instead of broad parser-only MP search for expanded requests.
+- Generic MP-property results now skip MatGL prediction and return MP summary properties through compact API/CLI output.
+- Search-space expansion now treats LLM-provided `chemsys` as advisory, computes canonical `chemsys` from formula, and retries when OpenRouter returns `{}` or omits `formula_targets`.
+- MatGL integration now suppresses known third-party load-time warnings (`torchdata` deprecation banner and old-checkpoint `@model_version` banner) so `matsci demo --calculate-matgl` stays clean while retaining compatibility fallback behavior.
 
 ## Biggest Current Limitation
 - Biggest current limitation is product-scope mismatch.
@@ -55,6 +61,7 @@ Build an MVP-first materials query system that accepts natural-language research
 5. Expand supported task classes only when real execution paths are added.
 6. Decide whether CLI needs JSON/export modes, scenario files, or a richer TUI after operator/demo feedback.
 7. Continue validating live MP retrieval quality for edge cases where real MP values exclude expected textbook materials.
+8. Validate live expansion-target formula coverage against Materials Project for representative material-family queries.
 
 ## Bottom Line
 Repository already contains a capable materials-screening scaffold, but near-term product target is narrower than current architecture.

@@ -16,6 +16,7 @@ class TaskCapability:
 
 TASK_REGISTRY: dict[str, TaskCapability] = {
     "band_gap_screening": TaskCapability(supported=True),
+    "mp_property_screening": TaskCapability(supported=True),
     "bulk_relaxation_only": TaskCapability(
         supported=False,
         reason_code="unsupported_relaxation_only",
