@@ -1,0 +1,697 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/4q5cli",
+    "id": "4q5cli",
+    "slide": 9,
+    "layoutId": "5c515efe-e000-441f-9769-00609fb2294a",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "29819999-4305-4042-9e54-0f90470ad2c6",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#F8FAFC",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "5c515efe-e000-441f-9769-00609fb2294a",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "29819999-4305-4042-9e54-0f90470ad2c6",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "29819999-4305-4042-9e54-0f90470ad2c6",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/a5gbq1or",
+      "id": "1",
+      "bbox": [
+        76,
+        64,
+        1040,
+        52
+      ],
+      "geometry": "rect",
+      "text": "What Scaffold Can And Cannot Do Today",
+      "textPreview": "What Scaffold Can And Cannot Do Today",
+      "resolvedFontSize": 28,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 28,
+        "typeface": "Aptos",
+        "color": "#0F172A",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "What Scaffold Can And Cannot Do Today"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "What Scaffold Can And Cannot Do Today",
+          "resolvedTextStyle": {
+            "fontSize": 28,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "What Scaffold Can And Cannot Do Today",
+              "fontSize": 28,
+              "typeface": "Aptos",
+              "color": "#0F172A",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lszqtcj6",
+      "id": "2",
+      "bbox": [
+        76,
+        150,
+        520,
+        460
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#CBD5E1",
+      "lineWidth": 1
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/s72x4nap",
+      "id": "3",
+      "bbox": [
+        98,
+        176,
+        220,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Already present",
+      "textPreview": "Already present",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#166534",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Already present"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Already present",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#166534",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Already present",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#166534",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ylc7u54",
+      "id": "4",
+      "bbox": [
+        98,
+        222,
+        458,
+        280
+      ],
+      "geometry": "rect",
+      "text": "- prompts/specs for 5 agents\n- typed I/O schemas\n- shared OpenAI-compatible client config\n- repo reading tools\n- git worktree / commit / PR scaffolding\n- manager-style controller wrapper\n- CLI entry for plan/run",
+      "textPreview": "- prompts/specs for 5 agents | - typed I/O schemas | - shared OpenAI-compatible client config | - repo reading tools | - git worktree / c...",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#0F172A",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 7,
+        "lines": [
+          {
+            "index": 1,
+            "text": "- prompts/specs for 5 agents"
+          },
+          {
+            "index": 2,
+            "text": "- typed I/O schemas"
+          },
+          {
+            "index": 3,
+            "text": "- shared OpenAI-compatible client config"
+          },
+          {
+            "index": 4,
+            "text": "- repo reading tools"
+          },
+          {
+            "index": 5,
+            "text": "- git worktree / commit / PR scaffolding"
+          },
+          {
+            "index": 6,
+            "text": "- manager-style controller wrapper"
+          },
+          {
+            "index": 7,
+            "text": "- CLI entry for plan/run"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "- prompts/specs for 5 agents",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- prompts/specs for 5 agents",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "- typed I/O schemas",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- typed I/O schemas",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 3,
+          "text": "- shared OpenAI-compatible client config",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- shared OpenAI-compatible client config",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 4,
+          "text": "- repo reading tools",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- repo reading tools",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 5,
+          "text": "- git worktree / commit / PR scaffolding",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- git worktree / commit / PR scaffolding",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 6,
+          "text": "- manager-style controller wrapper",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- manager-style controller wrapper",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 7,
+          "text": "- CLI entry for plan/run",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- CLI entry for plan/run",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/adsji5sn",
+      "id": "5",
+      "bbox": [
+        684,
+        150,
+        520,
+        460
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#CBD5E1",
+      "lineWidth": 1
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/h4byhgn2",
+      "id": "6",
+      "bbox": [
+        706,
+        176,
+        220,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Still missing",
+      "textPreview": "Still missing",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#92400E",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Still missing"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Still missing",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#92400E",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Still missing",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#92400E",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/sji5snel",
+      "id": "7",
+      "bbox": [
+        706,
+        222,
+        458,
+        280
+      ],
+      "geometry": "rect",
+      "text": "- richer formatted prompts with examples\n- real retrieval eval runner\n- tighter controller retry state machine\n- real code-edit execution path for debugger\n- test execution wrapper\n- live trace integration and result artifacts",
+      "textPreview": "- richer formatted prompts with examples | - real retrieval eval runner | - tighter controller retry state machine | - real code-edit exe...",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#0F172A",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 6,
+        "lines": [
+          {
+            "index": 1,
+            "text": "- richer formatted prompts with examples"
+          },
+          {
+            "index": 2,
+            "text": "- real retrieval eval runner"
+          },
+          {
+            "index": 3,
+            "text": "- tighter controller retry state machine"
+          },
+          {
+            "index": 4,
+            "text": "- real code-edit execution path for debugger"
+          },
+          {
+            "index": 5,
+            "text": "- test execution wrapper"
+          },
+          {
+            "index": 6,
+            "text": "- live trace integration and result artifacts"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "- richer formatted prompts with examples",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- richer formatted prompts with examples",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "- real retrieval eval runner",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- real retrieval eval runner",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 3,
+          "text": "- tighter controller retry state machine",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- tighter controller retry state machine",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 4,
+          "text": "- real code-edit execution path for debugger",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- real code-edit execution path for debugger",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 5,
+          "text": "- test execution wrapper",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- test execution wrapper",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 6,
+          "text": "- live trace integration and result artifacts",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- live trace integration and result artifacts",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

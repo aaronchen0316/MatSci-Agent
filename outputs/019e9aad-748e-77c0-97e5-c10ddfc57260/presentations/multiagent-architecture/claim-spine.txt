@@ -1,0 +1,22 @@
+Thesis: Current multi-agent harness is manager-style supervision layer around existing MatSci retrieval workflow, not replacement for deterministic shortlist pipeline.
+
+Audience: engineering presentation audience with limited prior multi-agent knowledge.
+
+Arc:
+1. Define problem and current repo split.
+2. Explain scaffold pieces.
+3. Show collaboration flow.
+4. Clarify safety, keys, sandbox.
+5. State current limits and next steps.
+
+Slides:
+1. Title and talk promise.
+2. Why multi-agent layer exists.
+3. Architecture split: product workflow vs repair harness.
+4. Runtime placement and prompt placement.
+5. Sub-agent responsibilities.
+6. Multi-agent architecture chart.
+7. Collaboration workflow.
+8. Safety, sandbox, and key model.
+9. Current scaffold status and gaps.
+10. Recommended next steps.

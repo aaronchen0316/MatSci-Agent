@@ -180,6 +180,29 @@
 - Generic MP-property results are MP-only and skip MatGL prediction.
 - Reason: raw user intent often lacks enough content for high-quality MP retrieval, but broad parser-only retrieval wastes calls and feeds weak candidates into fail-closed policy filtering.
 
+## Decision 36: Place retrieval-repair multi-agent harness outside DiscoveryWorkflow
+- Experimental multi-agent retrieval repair should supervise the existing workflow from outside, not replace deterministic shortlist execution inside `DiscoveryWorkflow`.
+- Save human-readable agent specs under top-level `agent_specs/`, but keep runtime code under `src/matsci_agent/multiagent/`.
+- Reason: `agent_specs/` makes prompt/spec intent explicit and avoids conceptual collision with the OpenAI Agents SDK import name `agents`.
+
+## Decision 37: Use manager-style controller with bounded specialist tools for retrieval repair
+- Use one Controller Agent with specialist sub-agent tools: Retrieval Tester, Materials Query Critic, Codex Debugger, Final Verifier.
+- Share one model/client config across sub-agents, default model `gpt-5.4-mini`.
+- Default tracing off for OpenAI-compatible proxy setups unless separate real OpenAI tracing credentials are provided.
+- Gate live MP evals, git writes, and PR creation behind explicit env flags.
+- Reason: manager-style orchestration gives one place for shared guardrails while preserving narrow specialist prompts and safe default behavior.
+
+## Decision 38: Future shared memory layer belongs to multi-agent harness, not main retrieval app
+- If a true shared memory layer is added, it should live under `src/matsci_agent/multiagent/` and support only retrieval-repair orchestration concerns such as handoff memory, run artifacts, and iterative agent review state.
+- Do not inject multi-agent memory semantics into the main deterministic `src/matsci_agent` workflow unless product execution later requires durable orchestration state.
+- Reason: core retrieval app should stay typed, reproducible, and thin; shared memory is orchestration infrastructure, not current product execution logic.
+
+## Decision 39: Multi-agent scientific judgment must be explicit in agent prompts
+- Retrieval Tester prompt must explicitly instruct chemistry, materials science, and solid-state physics evaluation of retrieval quality.
+- Materials Query Critic prompt must explicitly distinguish invalid chemistry, bad MP mapping, wrong structural retrieval strategy, and downstream ranking/policy failure.
+- Final Verifier prompt must explicitly reject pass-rate gains that weaken scientific validity.
+- Reason: domain correctness in retrieval repair should not rely on implicit model knowledge alone.
+
 ## Assumptions
 - MVP means retrieval-first product, not research-grade predictor platform.
 - Existing files only; no new `memory/project.md`, no new log file.

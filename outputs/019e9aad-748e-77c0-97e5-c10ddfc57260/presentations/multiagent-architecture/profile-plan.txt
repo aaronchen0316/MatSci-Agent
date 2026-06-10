@@ -1,0 +1,17 @@
+task mode: create
+primary deck-profile: engineering-platform
+secondary gates:
+- strategy-leadership for architecture decision rationale
+required proof objects:
+- one architecture chart
+- concise code/path references
+- safe explanation of sandbox and key setup
+source requirements:
+- CONTEXT.md
+- multiagent runtime files
+- agent_specs prompt files
+- pyproject.toml
+qa gate:
+- plain, accurate, no fancy design
+- 10-15 minute talk length
+- only one chart: multi-agent architecture

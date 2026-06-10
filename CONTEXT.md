@@ -7,6 +7,7 @@ MatSci-Agent is an agentic materials-screening system for Materials Project entr
 - Public entrypoint: `POST /discover`
 - Debug trace entrypoint: `POST /discover/full`
 - Orchestration: LangGraph workflow
+- Experimental retrieval-repair orchestration: external multi-agent harness may supervise the workflow, but should not replace deterministic shortlist execution inside `DiscoveryWorkflow`; human-readable agent specs live under `agent_specs/`
 - Retrieval source: Materials Project
 - Primary target properties: MP summary fields such as `band_gap`, `formation_energy`, `energy_above_hull`, `density`, and `volume`
 - Property policy: MP retrieval and policy filtering decide shortlist membership; optional MatGL recalculation runs only on finalized band-gap shortlist rows and affects final ranking/display, not membership
@@ -74,6 +75,16 @@ This layer should remain typed, reproducible, and testable.
 
 ### Reporting Agent
 Deterministic summarization layer that explains results or refusals after deterministic execution is complete. It should not modify candidate selection or scoring.
+
+### Retrieval Repair Harness
+An external multi-agent supervision layer for evaluating and improving retrieval quality.
+
+Expected behavior:
+- runs outside `DiscoveryWorkflow`
+- uses `POST /discover/full` or equivalent local trace surface as evidence
+- treats retrieval quality as staged failures such as intent parse, Search Space Expansion, retrieval, Policy Filter, and final ranking
+- may open isolated git branches/worktrees for debugger changes
+- should preserve the existing deterministic shortlist pipeline as source of truth
 
 ### Task Registry
 A finite canonical registry of supported and unsupported task classes. This is the preferred guardrail mechanism because it is easier to audit, update, and test than free-form LLM capability judgments.

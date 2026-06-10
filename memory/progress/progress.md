@@ -40,6 +40,10 @@ Build an MVP-first materials query system that accepts natural-language research
 - Retrieval now uses expansion formula targets first, then bounded chemsys fallback, instead of broad parser-only MP search for expanded requests.
 - Generic MP-property results now skip MatGL prediction and return MP summary properties through compact API/CLI output.
 - Search-space expansion now treats LLM-provided `chemsys` as advisory, computes canonical `chemsys` from formula, and retries when OpenRouter returns `{}` or omits `formula_targets`.
+- Experimental multi-agent retrieval-repair scaffolding now exists outside `DiscoveryWorkflow`, with agent specs under `agent_specs/` and runtime harness under `src/matsci_agent/multiagent/`.
+- Harness uses manager-style controller + specialist agents for retrieval eval / critique / repair / verification, but keeps live MP evals and git mutations disabled by default.
+- Multi-agent harness currently shares only typed payloads and repo context, not a true memory layer. Any future shared memory should belong to `src/matsci_agent/multiagent/` only, not the main deterministic `src/matsci_agent` retrieval workflow.
+- Multi-agent prompt specs now explicitly assign chemistry, materials science, and solid-state physics judgment to the tester, critic, and verifier instead of leaving scientific review implicit.
 - MatGL integration now suppresses known third-party load-time warnings (`torchdata` deprecation banner and old-checkpoint `@model_version` banner) so `matsci demo --calculate-matgl` stays clean while retaining compatibility fallback behavior.
 - Band-gap screening with `calculate_matgl` now finalizes MP shortlist membership before running MatGL, reranks only shortlisted rows by recalculated gap, preserves MP membership on MatGL failure, and exposes separate `mp_band_gap_ev` / `matgl_band_gap_ev` fields in compact API and CLI output.
 

@@ -1,0 +1,4 @@
+Plain deck for 10-15 minute talk.
+No fancy design.
+One chart only: slide 06 architecture chart.
+All other slides use short text and layout boxes only.

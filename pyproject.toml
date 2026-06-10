@@ -23,11 +23,15 @@ dependencies = [
 
 [project.scripts]
 matsci = "matsci_agent.cli.main:app"
+matsci-multiagent = "matsci_agent.multiagent.cli:app"
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
   "httpx>=0.28.0",
+]
+agents = [
+  "openai-agents",
 ]
 mp = [
   "mp-api>=0.45.0",

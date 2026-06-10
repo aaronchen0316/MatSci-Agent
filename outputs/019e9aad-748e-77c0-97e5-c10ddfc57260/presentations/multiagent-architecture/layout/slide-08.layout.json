@@ -1,0 +1,678 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/1la3ij",
+    "id": "1la3ij",
+    "slide": 8,
+    "layoutId": "5c515efe-e000-441f-9769-00609fb2294a",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "29819999-4305-4042-9e54-0f90470ad2c6",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#F8FAFC",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "5c515efe-e000-441f-9769-00609fb2294a",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "29819999-4305-4042-9e54-0f90470ad2c6",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "29819999-4305-4042-9e54-0f90470ad2c6",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/szqtcj6t",
+      "id": "1",
+      "bbox": [
+        76,
+        64,
+        860,
+        52
+      ],
+      "geometry": "rect",
+      "text": "Safety, Sandbox, Keys",
+      "textPreview": "Safety, Sandbox, Keys",
+      "resolvedFontSize": 28,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 28,
+        "typeface": "Aptos",
+        "color": "#0F172A",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Safety, Sandbox, Keys"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Safety, Sandbox, Keys",
+          "resolvedTextStyle": {
+            "fontSize": 28,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Safety, Sandbox, Keys",
+              "fontSize": 28,
+              "typeface": "Aptos",
+              "color": "#0F172A",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ex0nuxc",
+      "id": "2",
+      "bbox": [
+        76,
+        148,
+        540,
+        440
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#CBD5E1",
+      "lineWidth": 1
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/at47y1kr",
+      "id": "3",
+      "bbox": [
+        98,
+        174,
+        320,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Safety controls in code",
+      "textPreview": "Safety controls in code",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#2563EB",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Safety controls in code"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Safety controls in code",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#2563EB",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Safety controls in code",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#2563EB",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/l87ed8ba",
+      "id": "4",
+      "bbox": [
+        98,
+        220,
+        470,
+        210
+      ],
+      "geometry": "rect",
+      "text": "- settings.py gates live MP / git write / PR\n- tools.py separates read-only vs mutation tools\n- prompts add soft rules\n- host sandbox still strongest hard boundary",
+      "textPreview": "- settings.py gates live MP / git write / PR | - tools.py separates read-only vs mutation tools | - prompts add soft rules | - host sandb...",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#0F172A",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "- settings.py gates live MP / git write / PR"
+          },
+          {
+            "index": 2,
+            "text": "- tools.py separates read-only vs mutation tools"
+          },
+          {
+            "index": 3,
+            "text": "- prompts add soft rules"
+          },
+          {
+            "index": 4,
+            "text": "- host sandbox still strongest hard boundary"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "- settings.py gates live MP / git write / PR",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- settings.py gates live MP / git write / PR",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "- tools.py separates read-only vs mutation tools",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- tools.py separates read-only vs mutation tools",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 3,
+          "text": "- prompts add soft rules",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- prompts add soft rules",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 4,
+          "text": "- host sandbox still strongest hard boundary",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- host sandbox still strongest hard boundary",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/sneloj2t",
+      "id": "5",
+      "bbox": [
+        664,
+        148,
+        540,
+        440
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#CBD5E1",
+      "lineWidth": 1
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/32lszqtc",
+      "id": "6",
+      "bbox": [
+        686,
+        174,
+        240,
+        28
+      ],
+      "geometry": "rect",
+      "text": "API key model",
+      "textPreview": "API key model",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#2563EB",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "API key model"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "API key model",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#2563EB",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "API key model",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#2563EB",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ahoza1gv",
+      "id": "7",
+      "bbox": [
+        686,
+        220,
+        470,
+        230
+      ],
+      "geometry": "rect",
+      "text": "- one shared client for all sub-agents\n- config from MULTIAGENT_API_KEY, MULTIAGENT_BASE_URL, MULTIAGENT_MODEL\n- OpenAI key works\n- OpenAI-compatible proxy key can work if syntax truly compatible\n- one key per sub-agent not needed",
+      "textPreview": "- one shared client for all sub-agents | - config from MULTIAGENT_API_KEY, MULTIAGENT_BASE_URL, MULTIAGENT_MODEL | - OpenAI key works | -...",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 22,
+        "typeface": "Aptos",
+        "color": "#0F172A",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 8,
+        "lines": [
+          {
+            "index": 1,
+            "text": "- one shared client for all sub-agents"
+          },
+          {
+            "index": 2,
+            "text": "- config from MULTIAGENT_API_KEY,"
+          },
+          {
+            "index": 3,
+            "text": "MULTIAGENT_BASE_URL,"
+          },
+          {
+            "index": 4,
+            "text": "MULTIAGENT_MODEL"
+          },
+          {
+            "index": 5,
+            "text": "- OpenAI key works"
+          },
+          {
+            "index": 6,
+            "text": "- OpenAI-compatible proxy key can work if"
+          },
+          {
+            "index": 7,
+            "text": "syntax truly compatible"
+          },
+          {
+            "index": 8,
+            "text": "- one key per sub-agent not needed"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "- one shared client for all sub-agents",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- one shared client for all sub-agents",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "- config from MULTIAGENT_API_KEY, MULTIAGENT_BASE_URL, MULTIAGENT_MODEL",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- config from MULTIAGENT_API_KEY, MULTIAGENT_BASE_URL, MULTIAGENT_MODEL",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 3,
+          "text": "- OpenAI key works",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- OpenAI key works",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 4,
+          "text": "- OpenAI-compatible proxy key can work if syntax truly compatible",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- OpenAI-compatible proxy key can work if syntax truly compatible",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 5,
+          "text": "- one key per sub-agent not needed",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "typeface": "Aptos",
+            "color": "#0F172A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "- one key per sub-agent not needed",
+              "fontSize": 22,
+              "typeface": "Aptos",
+              "color": "#0F172A"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lwval87e",
+      "id": "8",
+      "bbox": [
+        76,
+        626,
+        1120,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Current default mode: conservative. No live MP, no git writes, no PR creation unless flags enabled.",
+      "textPreview": "Current default mode: conservative. No live MP, no git writes, no PR creation unless flags enabled.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#92400E",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Current default mode: conservative. No live MP, no git writes, no PR creation unless flags enabled."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Current default mode: conservative. No live MP, no git writes, no PR creation unless flags enabled.",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#92400E",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Current default mode: conservative. No live MP, no git writes, no PR creation unless flags enabled.",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#92400E"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

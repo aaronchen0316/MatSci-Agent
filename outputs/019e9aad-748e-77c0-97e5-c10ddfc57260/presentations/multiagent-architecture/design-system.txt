@@ -1,0 +1,26 @@
+Slide size: 1280x720
+Look: plain, readable, presentation-safe
+Fonts:
+- title: Arial
+- body: Arial
+- mono: Courier New
+Colors:
+- background: #F8FAFC
+- title/body: #0F172A
+- muted: #475569
+- accent: #2563EB
+- accent light: #DBEAFE
+- border: #CBD5E1
+- success: #166534
+- warn: #92400E
+Layout families:
+- title
+- left text + right callout
+- full-width bullets
+- architecture chart
+- summary / next steps
+Rules:
+- no decorative graphics
+- no stock icons except simple Lucide when helpful
+- one claim title per slide
+- short bullets only
