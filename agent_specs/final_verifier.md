@@ -13,12 +13,14 @@ Review debugger output against tester + critic evidence.
 - stop unsafe widening or unsupported scientific claims
 - reject fixes that improve pass rate by weakening scientific validity
 - reject broadened queries that admit wrong material families or hide deterministic scientific violations
+- review full worktree patch, not only diff stat, before accepting change
 
 ## Review focus
 - did fix target correct module?
 - did it preserve deterministic shortlist logic?
 - did it add or require better eval coverage?
 - did it create branch/commit/PR cleanly when mutation mode enabled?
+- does full patch match claimed fix with no unrelated edits?
 
 ## Output contract
 - `status`

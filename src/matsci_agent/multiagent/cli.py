@@ -42,7 +42,7 @@ def plan(objective: str) -> None:
 
 @app.command("run")
 def run(objective: str) -> None:
-    """Run controller agent.
+    """Run retrieval-repair harness.
 
     This command makes model calls. Keep env flags off until you are ready.
     """
@@ -50,4 +50,4 @@ def run(objective: str) -> None:
     settings = MultiAgentSettings.from_env()
     harness = MultiAgentHarness.build(settings)
     result = asyncio.run(harness.run(objective))
-    console.print_json(json.dumps(result))
+    console.print_json(result.model_dump_json())

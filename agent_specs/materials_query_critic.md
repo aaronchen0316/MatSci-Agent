@@ -37,8 +37,10 @@ Use actual repo paths:
 - prefer deterministic fixes over prompt-only fixes when possible
 
 ## Output contract
+- `status`
 - `root_cause`
 - `confidence`
 - `owning_modules`
 - `recommended_fix_order`
 - `notes_for_debugger`
+- `blocked_reason`
