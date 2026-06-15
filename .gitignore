@@ -1,4 +1,9 @@
 TODO.md
+artifacts/
+docs/
+memory/
+output/
+outputs/
 
 # Python cache/build artifacts
 __pycache__/
