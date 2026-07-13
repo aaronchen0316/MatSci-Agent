@@ -25,6 +25,7 @@ Build an MVP-first materials query system that accepts natural-language research
   - `doctor` runs read-only setup diagnostics
   - `scenarios list|run` exposes built-in showcase requests
 - CLI defaults to in-process execution and can target live HTTP API with `--api-url`.
+- A presentation deck now exists at `outputs/backbone-workflow/matsci-backbone-workflow-before-multi-agent.pptx` to explain the pre-multi-agent backbone workflow, its retrieval design decisions, and the role of each major pass to a materials-science audience.
 - Policy filtering now runs by default after retrieval as one fail-closed LLM policy named `chemistry_screening`; no heuristic fallback path remains.
 - Policy filter still applies only to `band_gap_screening`, but it now uses richer discovery context including parsed `mp_filters` and candidate duplicate metadata.
 - Policy filter now frames candidates as Materials Project entries and consumes requested material class from user intent instead of old `material_class` shorthand.

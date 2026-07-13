@@ -13,3 +13,4 @@ mlflow.db
 .venv/
 .DS_Store
 output.log
+outputs/
