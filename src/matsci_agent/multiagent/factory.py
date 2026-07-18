@@ -21,6 +21,12 @@ class AgentRegistry:
     final_verifier: object
 
 
+def _non_strict_output_schema(sdk, output_type: type[object]) -> object:
+    """Keep Pydantic report validation while allowing dynamic evidence maps."""
+
+    return sdk.AgentOutputSchema(output_type, strict_json_schema=False)
+
+
 def build_agent_registry(sdk, settings: MultiAgentSettings, tool_groups: ToolGroups) -> AgentRegistry:
     """Create all agents in one place.
 
@@ -33,28 +39,28 @@ def build_agent_registry(sdk, settings: MultiAgentSettings, tool_groups: ToolGro
         instructions=load_agent_prompt("retrieval_tester"),
         model=settings.model,
         tools=tool_groups.tester,
-        output_type=RetrievalTesterReport,
+        output_type=_non_strict_output_schema(sdk, RetrievalTesterReport),
     )
     materials_query_critic = sdk.Agent(
         name="Materials Query Critic Agent",
         instructions=load_agent_prompt("materials_query_critic"),
         model=settings.model,
         tools=tool_groups.critic,
-        output_type=MaterialsQueryCriticReport,
+        output_type=_non_strict_output_schema(sdk, MaterialsQueryCriticReport),
     )
     codex_debugger = sdk.Agent(
         name="Codex Debugger Agent",
         instructions=load_agent_prompt("codex_debugger"),
         model=settings.model,
         tools=tool_groups.debugger,
-        output_type=CodexDebuggerReport,
+        output_type=_non_strict_output_schema(sdk, CodexDebuggerReport),
     )
     final_verifier = sdk.Agent(
         name="Final Verifier Agent",
         instructions=load_agent_prompt("final_verifier"),
         model=settings.model,
         tools=tool_groups.verifier,
-        output_type=FinalVerifierReport,
+        output_type=_non_strict_output_schema(sdk, FinalVerifierReport),
     )
     return AgentRegistry(
         retrieval_tester=retrieval_tester,

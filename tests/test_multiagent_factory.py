@@ -15,6 +15,10 @@ class FakeSDK:
         self.agents.append(kwargs)
         return kwargs
 
+    @staticmethod
+    def AgentOutputSchema(output_type, strict_json_schema: bool):
+        return {"output_type": output_type, "strict_json_schema": strict_json_schema}
+
 
 def test_factory_builds_only_specialist_agents(tmp_path: Path):
     sdk = FakeSDK()
@@ -31,3 +35,4 @@ def test_factory_builds_only_specialist_agents(tmp_path: Path):
         "Codex Debugger Agent",
         "Final Verifier Agent",
     ]
+    assert all(agent["output_type"]["strict_json_schema"] is False for agent in sdk.agents)
