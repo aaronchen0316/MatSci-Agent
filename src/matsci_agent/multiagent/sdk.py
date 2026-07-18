@@ -34,7 +34,7 @@ def configure_sdk(settings: MultiAgentSettings) -> ModuleType:
             api_key=settings.api_key,
             base_url=settings.base_url,
         )
-        # One shared client is enough for controller + all sub-agents.
+        # One shared client is enough for all specialist agents.
         sdk.set_default_openai_client(client, use_for_tracing=not settings.disable_tracing)
 
     return sdk

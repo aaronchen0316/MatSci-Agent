@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from matsci_agent.multiagent.live_suite import run_live_suite
 from matsci_agent.multiagent.orchestrator import MultiAgentHarness
 from matsci_agent.multiagent.settings import MultiAgentSettings
 
@@ -29,9 +30,8 @@ def plan(objective: str) -> None:
                     "disable_tracing": settings.disable_tracing,
                     "enable_live_mp": settings.enable_live_mp,
                     "enable_git_write": settings.enable_git_write,
-                    "enable_prs": settings.enable_prs,
                     "base_branch": settings.base_branch,
-                    "github_repo": settings.github_repo,
+                    "artifact_root": str(settings.resolved_artifact_root),
                 },
                 indent=2,
             ),
@@ -51,3 +51,14 @@ def run(objective: str) -> None:
     harness = MultiAgentHarness.build(settings)
     result = asyncio.run(harness.run(objective))
     console.print_json(result.model_dump_json())
+
+
+@app.command("eval-live")
+def eval_live() -> None:
+    """Run credentialed live Materials Project regression scenarios."""
+
+    settings = MultiAgentSettings.from_env()
+    result = run_live_suite(settings)
+    console.print_json(result.model_dump_json())
+    if result.status != "pass":
+        raise typer.Exit(code=1)

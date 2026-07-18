@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from matsci_agent.schemas import DiscoveryConstraints
+
 FailureStage = Literal[
     "intent_parse",
     "search_space_expansion",
@@ -36,6 +38,7 @@ class RetrievalTesterInput(BaseModel):
 
 class LiveEvalInput(BaseModel):
     query: str
+    constraints: DiscoveryConstraints | None = None
     allow_live_mp: bool = False
 
 
@@ -64,6 +67,7 @@ class CompiledFilterEvidence(BaseModel):
     effective_filters: dict[str, Any] = Field(default_factory=dict)
     mp_search_kwargs: dict[str, Any] = Field(default_factory=dict)
     mp_search_kwargs_sequence: list[dict[str, Any]] = Field(default_factory=list)
+    missing_filter_keys: list[str] = Field(default_factory=list)
 
 
 class LiveEvalEvidence(BaseModel):
@@ -117,7 +121,6 @@ class CodexDebuggerReport(BaseModel):
     worktree_path: str | None = None
     files_touched: list[str] = Field(default_factory=list)
     commit_sha: str | None = None
-    pr_url: str | None = None
     change_summary: str
     follow_up_for_verifier: list[str] = Field(default_factory=list)
 
@@ -138,19 +141,10 @@ class FinalVerifierReport(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list)
 
 
-class ControllerSummary(BaseModel):
-    status: Literal["pass", "fail", "blocked"]
-    summary: str
-    next_step: str
-    branch_name: str | None = None
-    pr_url: str | None = None
-
-
 class HarnessAttemptRecord(BaseModel):
     attempt_number: int = Field(ge=1)
     branch_name: str | None = None
     worktree_path: str | None = None
-    pr_url: str | None = None
     tester_report: RetrievalTesterReport
     critic_report: MaterialsQueryCriticReport | None = None
     debugger_report: CodexDebuggerReport | None = None
@@ -166,9 +160,30 @@ class HarnessRunReport(BaseModel):
     attempt_count: int = Field(ge=1)
     branch_name: str | None = None
     worktree_path: str | None = None
-    pr_url: str | None = None
+    artifact_dir: str | None = None
+    worktree_cleanup_status: str | None = None
     attempts: list[HarnessAttemptRecord] = Field(default_factory=list)
     latest_tester_report: RetrievalTesterReport | None = None
     latest_critic_report: MaterialsQueryCriticReport | None = None
     latest_debugger_report: CodexDebuggerReport | None = None
     latest_verifier_report: FinalVerifierReport | None = None
+
+
+class LiveEvalScenario(BaseModel):
+    name: str
+    query: str
+    constraints: DiscoveryConstraints = Field(default_factory=DiscoveryConstraints)
+    min_ranked_count: int = Field(default=1, ge=1)
+    require_target_quality: bool = False
+
+
+class LiveEvalScenarioResult(BaseModel):
+    scenario: LiveEvalScenario
+    evidence: LiveEvalEvidence
+    assertion_failures: list[str] = Field(default_factory=list)
+
+
+class LiveEvalSuiteReport(BaseModel):
+    status: Literal["pass", "fail", "blocked"]
+    artifact_dir: str | None = None
+    scenarios: list[LiveEvalScenarioResult] = Field(default_factory=list)

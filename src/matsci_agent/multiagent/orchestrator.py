@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from matsci_agent.multiagent.artifacts import HarnessArtifactStore
 from matsci_agent.multiagent.factory import AgentRegistry, build_agent_registry
 from matsci_agent.multiagent.schemas import (
     CodexDebuggerInput,
@@ -20,7 +21,7 @@ from matsci_agent.multiagent.schemas import (
 )
 from matsci_agent.multiagent.sdk import configure_sdk
 from matsci_agent.multiagent.settings import MultiAgentSettings
-from matsci_agent.multiagent.tools import build_tool_groups
+from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree, worktree_evidence
 
 _MAX_REPAIR_ATTEMPTS = 3
 
@@ -40,41 +41,23 @@ class MultiAgentHarness:
         runtime = settings or MultiAgentSettings.from_env()
         sdk = configure_sdk(runtime)
         tool_groups = build_tool_groups(sdk, runtime)
-
-        # We wrap sub-agents as function tools here instead of using Agent.as_tool()
-        # directly. This gives us explicit control over:
-        # - input schemas
-        # - typed final-output serialization
-        # - future per-agent logging / branch policy hooks
-        registry = build_agent_registry(sdk, runtime, tool_groups, controller_tools=[])
+        registry = build_agent_registry(sdk, runtime, tool_groups)
         runner = sdk.Runner
 
         async def run_retrieval_tester(payload: RetrievalTesterInput) -> RetrievalTesterReport:
-            result = await runner.run(
-                registry.retrieval_tester,
-                payload.model_dump_json(indent=2),
-            )
+            result = await runner.run(registry.retrieval_tester, payload.model_dump_json(indent=2))
             return RetrievalTesterReport.model_validate(result.final_output.model_dump(mode="json"))
 
         async def run_materials_query_critic(payload: MaterialsQueryCriticInput) -> MaterialsQueryCriticReport:
-            result = await runner.run(
-                registry.materials_query_critic,
-                payload.model_dump_json(indent=2),
-            )
+            result = await runner.run(registry.materials_query_critic, payload.model_dump_json(indent=2))
             return MaterialsQueryCriticReport.model_validate(result.final_output.model_dump(mode="json"))
 
         async def run_codex_debugger(payload: CodexDebuggerInput) -> CodexDebuggerReport:
-            result = await runner.run(
-                registry.codex_debugger,
-                payload.model_dump_json(indent=2),
-            )
+            result = await runner.run(registry.codex_debugger, payload.model_dump_json(indent=2))
             return CodexDebuggerReport.model_validate(result.final_output.model_dump(mode="json"))
 
         async def run_final_verifier(payload: FinalVerifierInput) -> FinalVerifierReport:
-            result = await runner.run(
-                registry.final_verifier,
-                payload.model_dump_json(indent=2),
-            )
+            result = await runner.run(registry.final_verifier, payload.model_dump_json(indent=2))
             return FinalVerifierReport.model_validate(result.final_output.model_dump(mode="json"))
 
         return cls(
@@ -88,228 +71,185 @@ class MultiAgentHarness:
         )
 
     async def run(self, objective: str) -> HarnessRunReport:
+        store = HarnessArtifactStore.create(self.settings, objective)
         attempts: list[HarnessAttemptRecord] = []
         verifier_feedback: str | None = None
         branch_name: str | None = None
         worktree_path: str | None = None
-        pr_url: str | None = None
         latest_tester: RetrievalTesterReport | None = None
         latest_critic: MaterialsQueryCriticReport | None = None
         latest_debugger: CodexDebuggerReport | None = None
         latest_verifier: FinalVerifierReport | None = None
 
-        for attempt_number in range(1, _MAX_REPAIR_ATTEMPTS + 1):
-            tester_report = await self.retrieval_tester_runner(
-                RetrievalTesterInput(
-                    objective=objective,
-                    verifier_feedback=verifier_feedback,
-                    allow_live_mp=self.settings.enable_live_mp,
-                )
+        def finish(
+            *,
+            status: str,
+            stop_reason: HarnessStopReason,
+            summary: str,
+            next_step: str,
+        ) -> HarnessRunReport:
+            cleanup_status = "not_needed"
+            if worktree_path:
+                try:
+                    store.write_json("worktree_evidence.json", worktree_evidence(self.settings, worktree_path))
+                except ValueError as exc:
+                    store.write_json("worktree_evidence.json", {"error": str(exc)})
+                cleanup = cleanup_worktree(self.settings, worktree_path)
+                cleanup_status = str(cleanup.get("status", "failed"))
+                store.write_json("worktree_cleanup.json", cleanup)
+            report = self._finalize_run_report(
+                status=status,
+                stop_reason=stop_reason,
+                summary=summary,
+                next_step=next_step,
+                attempts=attempts,
+                latest_tester=latest_tester,
+                latest_critic=latest_critic,
+                latest_debugger=latest_debugger,
+                latest_verifier=latest_verifier,
+                branch_name=branch_name,
+                worktree_path=worktree_path,
+                artifact_dir=str(store.run_dir),
+                worktree_cleanup_status=cleanup_status,
             )
+            store.write_model("harness_run_report.json", report)
+            return report
+
+        for attempt_number in range(1, _MAX_REPAIR_ATTEMPTS + 1):
+            tester_input = RetrievalTesterInput(
+                objective=objective,
+                verifier_feedback=verifier_feedback,
+                allow_live_mp=self.settings.enable_live_mp,
+            )
+            store.write_model(f"attempts/{attempt_number}/retrieval_tester_input.json", tester_input)
+            tester_report = await self.retrieval_tester_runner(tester_input)
+            store.write_model(f"attempts/{attempt_number}/retrieval_tester_report.json", tester_report)
             latest_tester = tester_report
             attempt = HarnessAttemptRecord(
                 attempt_number=attempt_number,
                 branch_name=branch_name,
                 worktree_path=worktree_path,
-                pr_url=pr_url,
                 tester_report=tester_report,
             )
 
             if tester_report.status == "pass":
                 attempt.stop_reason_fragment = "tester_pass"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="pass",
                     stop_reason="tester_pass",
                     summary="Retrieval tester passed; no repair loop needed.",
                     next_step="Review evaluator evidence or continue with broader eval coverage.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
                 )
-
             if tester_report.status == "blocked":
                 attempt.stop_reason_fragment = "tester_blocked"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="blocked",
                     stop_reason="tester_blocked",
                     summary="Retrieval tester blocked before repair loop could continue.",
                     next_step="Enable missing live-eval or repo prerequisites, then rerun harness.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
                 )
 
-            critic_report = await self.materials_query_critic_runner(
-                MaterialsQueryCriticInput(tester_report=tester_report)
-            )
+            critic_input = MaterialsQueryCriticInput(tester_report=tester_report)
+            store.write_model(f"attempts/{attempt_number}/materials_query_critic_input.json", critic_input)
+            critic_report = await self.materials_query_critic_runner(critic_input)
+            store.write_model(f"attempts/{attempt_number}/materials_query_critic_report.json", critic_report)
             latest_critic = critic_report
             attempt.critic_report = critic_report
-
             if critic_report.status == "blocked":
                 attempt.stop_reason_fragment = "critic_blocked"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="blocked",
                     stop_reason="critic_blocked",
                     summary="Materials Query Critic blocked; no safe root-cause diagnosis available.",
                     next_step=critic_report.blocked_reason or "Unblock critic inputs, then rerun harness.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
                 )
 
-            debugger_report = await self.codex_debugger_runner(
-                CodexDebuggerInput(
-                    tester_report=tester_report,
-                    critic_report=critic_report,
-                    target_branch_prefix="retrieval-fix",
-                    existing_branch_name=branch_name,
-                    existing_worktree_path=worktree_path,
-                )
+            debugger_input = CodexDebuggerInput(
+                tester_report=tester_report,
+                critic_report=critic_report,
+                target_branch_prefix="retrieval-fix",
+                existing_branch_name=branch_name,
+                existing_worktree_path=worktree_path,
             )
+            store.write_model(f"attempts/{attempt_number}/codex_debugger_input.json", debugger_input)
+            debugger_report = await self.codex_debugger_runner(debugger_input)
+            store.write_model(f"attempts/{attempt_number}/codex_debugger_report.json", debugger_report)
             latest_debugger = debugger_report
             branch_name = debugger_report.branch_name or branch_name
             worktree_path = debugger_report.worktree_path or worktree_path
-            pr_url = debugger_report.pr_url or pr_url
             attempt.debugger_report = debugger_report
             attempt.branch_name = branch_name
             attempt.worktree_path = worktree_path
-            attempt.pr_url = pr_url
-
             if debugger_report.status == "blocked":
                 attempt.stop_reason_fragment = "debugger_blocked"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="blocked",
                     stop_reason="debugger_blocked",
                     summary="Codex Debugger blocked; repair could not proceed safely.",
-                    next_step="Enable mutation prerequisites or relax blocked condition, then rerun harness.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
+                    next_step="Enable mutation prerequisites or resolve debugger blocker, then rerun harness.",
                 )
 
-            verifier_report = await self.final_verifier_runner(
-                FinalVerifierInput(
-                    objective=objective,
-                    tester_report=tester_report,
-                    critic_report=critic_report,
-                    debugger_report=debugger_report,
-                )
+            verifier_input = FinalVerifierInput(
+                objective=objective,
+                tester_report=tester_report,
+                critic_report=critic_report,
+                debugger_report=debugger_report,
             )
+            store.write_model(f"attempts/{attempt_number}/final_verifier_input.json", verifier_input)
+            verifier_report = await self.final_verifier_runner(verifier_input)
+            store.write_model(f"attempts/{attempt_number}/final_verifier_report.json", verifier_report)
             latest_verifier = verifier_report
             attempt.verifier_report = verifier_report
 
             if verifier_report.status == "pass":
                 attempt.stop_reason_fragment = "verifier_pass"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="pass",
                     stop_reason="verifier_pass",
                     summary="Verifier accepted repair loop outcome.",
-                    next_step="Review diff or PR, then merge when ready.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
+                    next_step="Review retained branch and artifacts, then merge when ready.",
                 )
-
             if verifier_report.status == "blocked":
                 attempt.stop_reason_fragment = "verifier_blocked"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="blocked",
                     stop_reason="verifier_blocked",
                     summary="Verifier blocked; repair loop could not reach final gate.",
                     next_step="Resolve verifier blocker, then rerun harness.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
                 )
-
             if verifier_report.status == "fail":
                 attempt.stop_reason_fragment = "verifier_fail"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="fail",
                     stop_reason="verifier_fail",
                     summary="Verifier rejected repair loop outcome.",
-                    next_step="Inspect verifier review notes and retry manually if still worthwhile.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
+                    next_step="Inspect retained branch and verifier review notes.",
                 )
-
             if attempt_number >= _MAX_REPAIR_ATTEMPTS:
                 attempt.stop_reason_fragment = "verifier_refresh_exhausted"
                 attempts.append(attempt)
-                return self._finalize_run_report(
+                return finish(
                     status="fail",
                     stop_reason="verifier_refresh_exhausted",
                     summary="Verifier requested tester refresh, but retry budget was exhausted.",
                     next_step="Inspect attempt history and rerun harness if more repair rounds are justified.",
-                    attempts=attempts,
-                    latest_tester=latest_tester,
-                    latest_critic=latest_critic,
-                    latest_debugger=latest_debugger,
-                    latest_verifier=latest_verifier,
-                    branch_name=branch_name,
-                    worktree_path=worktree_path,
-                    pr_url=pr_url,
                 )
             attempt.stop_reason_fragment = "needs_tester_refresh"
             attempts.append(attempt)
             verifier_feedback = verifier_report.tester_refresh_reason or verifier_report.summary
 
-        return self._finalize_run_report(
+        return finish(
             status="fail",
             stop_reason="verifier_refresh_exhausted",
             summary="Repair loop exhausted retry budget.",
             next_step="Inspect attempt history and rerun harness if needed.",
-            attempts=attempts,
-            latest_tester=latest_tester,
-            latest_critic=latest_critic,
-            latest_debugger=latest_debugger,
-            latest_verifier=latest_verifier,
-            branch_name=branch_name,
-            worktree_path=worktree_path,
-            pr_url=pr_url,
         )
 
     @staticmethod
@@ -326,7 +266,8 @@ class MultiAgentHarness:
         latest_verifier: FinalVerifierReport | None,
         branch_name: str | None,
         worktree_path: str | None,
-        pr_url: str | None,
+        artifact_dir: str,
+        worktree_cleanup_status: str,
     ) -> HarnessRunReport:
         return HarnessRunReport(
             status=status,
@@ -336,7 +277,8 @@ class MultiAgentHarness:
             attempt_count=len(attempts),
             branch_name=branch_name,
             worktree_path=worktree_path,
-            pr_url=pr_url,
+            artifact_dir=artifact_dir,
+            worktree_cleanup_status=worktree_cleanup_status,
             attempts=attempts,
             latest_tester_report=latest_tester,
             latest_critic_report=latest_critic,

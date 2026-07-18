@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable
 
-from matsci_agent.schemas import Candidate, DiscoveryFullResponse, DiscoveryRequest, MPRetrieverOutput, ToolCallProvenance
+from matsci_agent.schemas import Candidate, DiscoveryConstraints, DiscoveryFullResponse, DiscoveryRequest, MPRetrieverOutput, ToolCallProvenance
 from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
 from matsci_agent.workflow.graph import DiscoveryWorkflow
 
@@ -63,7 +63,12 @@ class LiveRetrievalEvaluator:
             return self._blocked(payload.query, f"missing {api_key_env}")
 
         workflow = self.workflow_factory() if self.workflow_factory is not None else DiscoveryWorkflow(retriever=self.retriever)
-        response = workflow.run_full(DiscoveryRequest(research_goal=payload.query))
+        response = workflow.run_full(
+            DiscoveryRequest(
+                research_goal=payload.query,
+                constraints=payload.constraints or DiscoveryConstraints(),
+            )
+        )
         return self._analyze_response(payload.query, response)
 
     def _blocked(self, query: str, reason: str) -> LiveEvalEvidence:
@@ -138,11 +143,56 @@ class LiveRetrievalEvaluator:
         if retriever_provenance is not None:
             mp_search_kwargs = dict(retriever_provenance.output_summary.get("search_kwargs") or {})
             mp_search_kwargs_sequence = list(retriever_provenance.output_summary.get("search_kwargs_sequence") or [])
+        effective_payload = effective.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
         return CompiledFilterEvidence(
-            effective_filters=effective.model_dump(mode="json", exclude_none=True, exclude_defaults=True),
+            effective_filters=effective_payload,
             mp_search_kwargs=mp_search_kwargs,
             mp_search_kwargs_sequence=mp_search_kwargs_sequence,
+            missing_filter_keys=self._missing_compiled_filter_keys(effective_payload, mp_search_kwargs_sequence),
         )
+
+    @staticmethod
+    def _missing_compiled_filter_keys(effective: dict[str, object], kwargs_sequence: list[dict[str, object]]) -> list[str]:
+        if not kwargs_sequence:
+            return []
+        latest = kwargs_sequence[-1]
+        required = {
+            key: value
+            for key, value in effective.items()
+            if key
+            in {
+                "formula",
+                "chemsys",
+                "material_ids",
+                "elements",
+                "exclude_elements",
+                "possible_species",
+                "has_props",
+                "is_metal",
+                "is_stable",
+                "is_gap_direct",
+                "theoretical",
+                "deprecated",
+                "has_reconstructed",
+                "crystal_system",
+                "spacegroup_number",
+                "spacegroup_symbol",
+                "band_gap",
+                "energy_above_hull",
+                "formation_energy",
+                "density",
+                "efermi",
+                "total_magnetization",
+                "volume",
+                "num_sites",
+                "num_elements",
+            }
+        }
+        missing: list[str] = []
+        for key in required:
+            if key not in latest:
+                missing.append(key)
+        return sorted(missing)
 
     def _violation_records(
         self,
@@ -193,6 +243,9 @@ class LiveRetrievalEvaluator:
         self._check_bool_match(violations, "is_metal", features.get("is_metal"), effective.is_metal)
         self._check_bool_match(violations, "theoretical", features.get("theoretical"), effective.theoretical)
         self._check_bool_match(violations, "deprecated", features.get("deprecated"), effective.deprecated)
+        self._check_string_match(violations, "crystal_system", features.get("crystal_system"), effective.crystal_system)
+        self._check_scalar_or_list_match(violations, "spacegroup_number", features.get("spacegroup_number"), effective.spacegroup_number)
+        self._check_scalar_or_list_match(violations, "spacegroup_symbol", features.get("spacegroup_symbol"), effective.spacegroup_symbol)
         return violations
 
     @staticmethod
@@ -222,6 +275,27 @@ class LiveRetrievalEvaluator:
         if bool(value) != expected:
             violations.append(f"{name}_mismatch")
 
+    @staticmethod
+    def _check_string_match(violations: list[str], name: str, value: object, expected: str | None) -> None:
+        if expected is None:
+            return
+        if value is None:
+            violations.append(f"{name}_missing")
+            return
+        if str(value).lower().split(".")[-1] != expected.lower():
+            violations.append(f"{name}_mismatch")
+
+    @staticmethod
+    def _check_scalar_or_list_match(violations: list[str], name: str, value: object, expected: object) -> None:
+        if expected is None:
+            return
+        if value is None:
+            violations.append(f"{name}_missing")
+            return
+        expected_values = expected if isinstance(expected, list) else [expected]
+        if value not in expected_values:
+            violations.append(f"{name}_mismatch")
+
     def _determine_failed_stage(
         self,
         response: DiscoveryFullResponse,
@@ -238,6 +312,9 @@ class LiveRetrievalEvaluator:
             return "search_space_expansion"
 
         if retriever_source == "materials_project" and not compiled_filters.mp_search_kwargs_sequence:
+            return "mp_query_compilation"
+
+        if retriever_source == "materials_project" and compiled_filters.missing_filter_keys:
             return "mp_query_compilation"
 
         if retriever_source == "materials_project" and counts.raw_count == 0:

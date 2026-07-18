@@ -62,7 +62,6 @@ def _debugger_report(
         worktree_path=worktree_path,
         files_touched=["src/matsci_agent/tools/mp_retriever.py"] if status != "blocked" else [],
         commit_sha="abc123" if status == "patched" else None,
-        pr_url=None,
         change_summary="patched filters" if status != "blocked" else "blocked",
         follow_up_for_verifier=["rerun tester"] if status == "patched" else [],
     )
@@ -133,6 +132,12 @@ def test_orchestrator_stops_when_tester_passes(tmp_path: Path):
     assert len(tester_calls) == 1
     assert report.attempts[0].stop_reason_fragment == "tester_pass"
     assert report.latest_critic_report is None
+    assert report.artifact_dir is not None
+    artifact_dir = Path(report.artifact_dir)
+    assert (artifact_dir / "manifest.json").is_file()
+    assert (artifact_dir / "attempts/1/retrieval_tester_input.json").is_file()
+    assert (artifact_dir / "attempts/1/retrieval_tester_report.json").is_file()
+    assert (artifact_dir / "harness_run_report.json").is_file()
 
 
 def test_orchestrator_stops_when_tester_blocked(tmp_path: Path):

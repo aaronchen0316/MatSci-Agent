@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from matsci_agent.multiagent.prompt_loader import load_agent_prompt
 from matsci_agent.multiagent.schemas import (
     CodexDebuggerReport,
-    ControllerSummary,
     FinalVerifierReport,
     MaterialsQueryCriticReport,
     RetrievalTesterReport,
@@ -16,14 +15,13 @@ from matsci_agent.multiagent.tools import ToolGroups
 
 @dataclass(frozen=True)
 class AgentRegistry:
-    controller: object
     retrieval_tester: object
     materials_query_critic: object
     codex_debugger: object
     final_verifier: object
 
 
-def build_agent_registry(sdk, settings: MultiAgentSettings, tool_groups: ToolGroups, controller_tools: list[object]) -> AgentRegistry:
+def build_agent_registry(sdk, settings: MultiAgentSettings, tool_groups: ToolGroups) -> AgentRegistry:
     """Create all agents in one place.
 
     Keeping agent construction centralized makes it easier to swap models,
@@ -58,15 +56,7 @@ def build_agent_registry(sdk, settings: MultiAgentSettings, tool_groups: ToolGro
         tools=tool_groups.verifier,
         output_type=FinalVerifierReport,
     )
-    controller = sdk.Agent(
-        name="Controller Agent",
-        instructions=load_agent_prompt("controller"),
-        model=settings.model,
-        tools=controller_tools,
-        output_type=ControllerSummary,
-    )
     return AgentRegistry(
-        controller=controller,
         retrieval_tester=retrieval_tester,
         materials_query_critic=materials_query_critic,
         codex_debugger=codex_debugger,

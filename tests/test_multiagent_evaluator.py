@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
 from matsci_agent.multiagent.schemas import LiveEvalInput, RetrievalTesterReport
-from matsci_agent.schemas import Candidate, DiscoveryConstraints, DiscoveryFullResponse, PredictedProperties, RankedCandidate, StabilityResult, ToolCallProvenance
+from matsci_agent.schemas import Candidate, DiscoveryConstraints, DiscoveryFullResponse, MPFilters, PredictedProperties, RankedCandidate, StabilityResult, ToolCallProvenance
 
 
 class FakeWorkflow:
@@ -61,6 +61,12 @@ def _retriever_provenance(
             "search_space_target_count": 2,
         },
     )
+
+
+def _default_search_kwargs(**overrides) -> dict:
+    kwargs = {"energy_above_hull": [0.0, 0.1]}
+    kwargs.update(overrides)
+    return kwargs
 
 
 def _response(
@@ -137,7 +143,7 @@ def test_live_evaluator_extracts_compiled_filters_and_counts(monkeypatch):
         nsites=6,
         is_metal=False,
     )
-    search_kwargs = {"elements": ["O"], "band_gap": [2.0, 20.0]}
+    search_kwargs = _default_search_kwargs(elements=["O"], band_gap=[2.0, 20.0])
     response = _response(
         constraints=constraints,
         raw_candidates=[candidate],
@@ -187,7 +193,7 @@ def test_live_evaluator_maps_search_space_failure(monkeypatch):
 
 def test_live_evaluator_maps_zero_results_from_real_mp(monkeypatch):
     monkeypatch.setenv("MP_API_KEY", "token")
-    search_kwargs = {"elements": ["O"]}
+    search_kwargs = _default_search_kwargs(elements=["O"])
     response = _response(
         provenance=[
             _retriever_provenance(
@@ -221,7 +227,7 @@ def test_live_evaluator_reports_constraint_violations_by_stage(monkeypatch):
             _retriever_provenance(
                 source="materials_project",
                 candidate_count=1,
-                search_kwargs={"elements": ["O"], "band_gap": [2.0, 20.0]},
+                search_kwargs=_default_search_kwargs(elements=["O"], band_gap=[2.0, 20.0]),
             )
         ],
     )
@@ -232,6 +238,93 @@ def test_live_evaluator_reports_constraint_violations_by_stage(monkeypatch):
     assert evidence.constraint_violations.raw[0].stage == "raw"
     assert "missing_required_elements" in evidence.constraint_violations.filtered[0].violations
     assert evidence.constraint_violations.ranked[0].stage == "ranked"
+
+
+def test_live_evaluator_passes_explicit_constraints_to_workflow(monkeypatch):
+    monkeypatch.setenv("MP_API_KEY", "token")
+    response = _response(
+        provenance=[
+            _retriever_provenance(
+                source="materials_project",
+                candidate_count=0,
+                search_kwargs=_default_search_kwargs(density=[0.0, 5.0]),
+            )
+        ],
+        status="failed",
+    )
+
+    class CapturingWorkflow(FakeWorkflow):
+        request = None
+
+        def run_full(self, request):
+            self.request = request
+            return self.response
+
+    workflow = CapturingWorkflow(response)
+    evaluator = LiveRetrievalEvaluator(workflow_factory=lambda: workflow)
+    constraints = DiscoveryConstraints(mp_filters=MPFilters(density={"max": 5.0}))
+
+    evaluator.evaluate(LiveEvalInput(query="find low-density materials", constraints=constraints, allow_live_mp=True))
+
+    assert workflow.request.constraints.mp_filters.density.max == 5.0
+
+
+def test_live_evaluator_rejects_missing_compiled_has_props_filter(monkeypatch):
+    monkeypatch.setenv("MP_API_KEY", "token")
+    constraints = DiscoveryConstraints(mp_filters=MPFilters(has_props=["dielectric"]))
+    candidate = _candidate("mp-1", "SiO2", mp_band_gap_ev=5.5, mp_energy_above_hull=0.01, nsites=6)
+    response = _response(
+        constraints=constraints,
+        raw_candidates=[candidate],
+        filtered_candidates=[candidate],
+        ranked_candidates=[_ranked(candidate)],
+        provenance=[
+            _retriever_provenance(
+                source="materials_project",
+                candidate_count=1,
+                search_kwargs=_default_search_kwargs(),
+            )
+        ],
+    )
+    evaluator = LiveRetrievalEvaluator(workflow_factory=lambda: FakeWorkflow(response))
+
+    evidence = evaluator.evaluate(LiveEvalInput(query="find dielectric materials", allow_live_mp=True))
+
+    assert evidence.status == "fail"
+    assert evidence.failed_stage == "mp_query_compilation"
+    assert evidence.compiled_filters.missing_filter_keys == ["has_props"]
+
+
+def test_live_evaluator_reports_cubic_symmetry_mismatch(monkeypatch):
+    monkeypatch.setenv("MP_API_KEY", "token")
+    constraints = DiscoveryConstraints(mp_filters=MPFilters(crystal_system="cubic"))
+    candidate = _candidate(
+        "mp-1",
+        "SiO2",
+        mp_band_gap_ev=5.5,
+        mp_energy_above_hull=0.01,
+        nsites=6,
+        crystal_system="tetragonal",
+    )
+    response = _response(
+        constraints=constraints,
+        raw_candidates=[candidate],
+        filtered_candidates=[candidate],
+        ranked_candidates=[_ranked(candidate)],
+        provenance=[
+            _retriever_provenance(
+                source="materials_project",
+                candidate_count=1,
+                search_kwargs=_default_search_kwargs(crystal_system="cubic"),
+            )
+        ],
+    )
+    evaluator = LiveRetrievalEvaluator(workflow_factory=lambda: FakeWorkflow(response))
+
+    evidence = evaluator.evaluate(LiveEvalInput(query="find cubic materials", allow_live_mp=True))
+
+    assert evidence.status == "fail"
+    assert "crystal_system_mismatch" in evidence.constraint_violations.ranked[0].violations
 
 
 def test_retrieval_tester_report_accepts_blocked_status():
