@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import shlex
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,24 +10,12 @@ from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
 from matsci_agent.multiagent.schemas import LiveEvalInput
 from matsci_agent.multiagent.settings import MultiAgentSettings
 
-_READONLY_PREFIXES = {
-    ("pwd",),
-    ("ls",),
-    ("find",),
-    ("sed",),
-    ("rg",),
-    ("git", "status"),
-    ("git", "diff"),
-    ("git", "branch"),
-    ("git", "log"),
-}
-
+_BRANCH_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _MUTABLE_PATH_PREFIXES = (
     "src/matsci_agent/",
     "tests/",
     "agent_specs/",
 )
-
 _MUTABLE_SUFFIXES = {
     ".py",
     ".md",
@@ -48,187 +36,232 @@ class ToolGroups:
     verifier: list[object]
 
 
+def _run_completed(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False)
+
+
+def _output(result: subprocess.CompletedProcess[str]) -> str:
+    return ((result.stdout or "") + (result.stderr or "")).strip()
+
+
+def _validate_branch_name(branch_name: str) -> str:
+    if not _BRANCH_NAME_PATTERN.fullmatch(branch_name):
+        raise ValueError("branch_name must be a safe single path segment")
+    if branch_name in {".", ".."} or ".." in branch_name:
+        raise ValueError("branch_name must not contain traversal segments")
+    return branch_name
+
+
+def _resolve_under(root: Path, candidate: str, *, require_exists: bool = False) -> Path:
+    path = Path(candidate)
+    if path.is_absolute():
+        raise ValueError(f"absolute paths are not allowed: {candidate}")
+    resolved = (root / path).resolve()
+    if root != resolved and root not in resolved.parents:
+        raise ValueError(f"path escapes configured root: {candidate}")
+    if require_exists and not resolved.exists():
+        raise ValueError(f"path does not exist: {candidate}")
+    return resolved
+
+
+def _worktree_dir(settings: MultiAgentSettings, worktree_path: str) -> Path:
+    root = settings.worktree_root.resolve()
+    path = Path(worktree_path).resolve()
+    if root not in path.parents:
+        raise ValueError(f"worktree path escapes configured root: {worktree_path}")
+    if not path.is_dir():
+        raise ValueError(f"worktree path does not exist: {worktree_path}")
+    return path
+
+
+def _is_mutable_relative_path(relative_path: str) -> bool:
+    path = Path(relative_path)
+    return (
+        bool(relative_path)
+        and not path.is_absolute()
+        and any(relative_path.startswith(prefix) for prefix in _MUTABLE_PATH_PREFIXES)
+        and path.suffix in _MUTABLE_SUFFIXES
+    )
+
+
+def _worktree_file(settings: MultiAgentSettings, worktree_path: str, relative_path: str) -> Path:
+    if not _is_mutable_relative_path(relative_path):
+        raise ValueError(f"path not allowlisted for mutation: {relative_path}")
+    worktree_dir = _worktree_dir(settings, worktree_path)
+    path = _resolve_under(worktree_dir, relative_path, require_exists=True)
+    if not path.is_file():
+        raise ValueError(f"file does not exist: {relative_path}")
+    return path
+
+
+def _numbered_slice(path: Path, start_line: int = 1, end_line: int = 240) -> str:
+    lines = path.read_text().splitlines()
+    start = max(1, start_line)
+    end = min(len(lines), max(start, end_line))
+    return "\n".join(f"{index}: {line}" for index, line in enumerate(lines[start - 1 : end], start=start))
+
+
+def worktree_evidence(settings: MultiAgentSettings, worktree_path: str) -> dict[str, str]:
+    cwd = _worktree_dir(settings, worktree_path)
+    return {
+        "status": _output(_run_completed(["git", "status", "--short"], cwd)),
+        "diff_stat": _output(_run_completed(["git", "diff", "--stat"], cwd)),
+        "patch": _output(_run_completed(["git", "diff", "--"], cwd)),
+        "head": _output(_run_completed(["git", "rev-parse", "HEAD"], cwd)),
+    }
+
+
+def cleanup_worktree(settings: MultiAgentSettings, worktree_path: str) -> dict[str, str]:
+    """Remove a clean worktree while preserving its branch."""
+
+    try:
+        cwd = _worktree_dir(settings, worktree_path)
+    except ValueError as exc:
+        return {"status": "failed", "reason": str(exc)}
+
+    dirty = _output(_run_completed(["git", "status", "--porcelain"], cwd))
+    if dirty:
+        return {"status": "blocked", "reason": "worktree has uncommitted changes"}
+    result = _run_completed(["git", "worktree", "remove", str(cwd)], settings.repo_root)
+    if result.returncode != 0:
+        return {"status": "failed", "reason": "git worktree remove failed", "output": _output(result)}
+    return {"status": "removed", "worktree_path": str(cwd)}
+
+
 def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
-    """Create narrow tool surfaces per specialist.
-
-    Proper multi-agent setup gives each specialist only tools it needs. Avoid a
-    single unrestricted shell tool for every agent.
-    """
-
-    def _repo_file(relative_path: str) -> Path:
-        path = (settings.repo_root / relative_path).resolve()
-        if settings.repo_root not in path.parents and path != settings.repo_root:
-            raise ValueError(f"path escapes repo root: {relative_path}")
-        return path
-
-    def _run_completed(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            args,
-            cwd=str(cwd or settings.repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    def _run(args: list[str], cwd: Path | None = None) -> str:
-        result = _run_completed(args, cwd=cwd)
-        output = (result.stdout or "") + (result.stderr or "")
-        return output.strip()
-
-    def _readonly_allowed(argv: list[str]) -> bool:
-        for prefix in _READONLY_PREFIXES:
-            if tuple(argv[: len(prefix)]) == prefix:
-                return True
-        return False
-
-    def _worktree_dir(worktree_path: str) -> Path:
-        root = settings.worktree_root.resolve()
-        path = Path(worktree_path).resolve()
-        if root not in path.parents:
-            raise ValueError(f"worktree path escapes configured root: {worktree_path}")
-        if not path.exists() or not path.is_dir():
-            raise ValueError(f"worktree path does not exist: {worktree_path}")
-        return path
-
-    def _worktree_file(worktree_path: str, relative_path: str) -> Path:
-        if not relative_path:
-            raise ValueError("relative_path is required")
-        if Path(relative_path).is_absolute():
-            raise ValueError(f"absolute paths are not allowed: {relative_path}")
-        if not any(relative_path.startswith(prefix) for prefix in _MUTABLE_PATH_PREFIXES):
-            raise ValueError(f"path not allowlisted for mutation: {relative_path}")
-
-        worktree_dir = _worktree_dir(worktree_path)
-        path = (worktree_dir / relative_path).resolve()
-        if worktree_dir not in path.parents:
-            raise ValueError(f"path escapes worktree root: {relative_path}")
-        if not path.exists() or not path.is_file():
-            raise ValueError(f"file does not exist: {relative_path}")
-        if path.suffix not in _MUTABLE_SUFFIXES:
-            raise ValueError(f"file type not allowed: {path.suffix}")
-        return path
-
-    def _numbered_slice(path: Path, start_line: int = 1, end_line: int = 240) -> str:
-        lines = path.read_text().splitlines()
-        start = max(1, start_line)
-        end = min(len(lines), end_line)
-        selected = lines[start - 1 : end]
-        numbered = [f"{idx}: {line}" for idx, line in enumerate(selected, start=start)]
-        return "\n".join(numbered)
+    """Create narrow typed tool surfaces for each specialist agent."""
 
     def read_context_snapshot() -> str:
-        """Return compact context needed by retrieval-repair agents."""
+        """Return compact project context needed by retrieval-repair agents."""
 
         context_path = settings.repo_root / "CONTEXT.md"
         readme_path = settings.repo_root / "README.md"
-        parts = [
-            "# CONTEXT.md\n",
-            context_path.read_text()[:12000],
-            "\n\n# README.md\n",
-            readme_path.read_text()[:12000],
-        ]
-        return "".join(parts)
+        return "".join(
+            [
+                "# CONTEXT.md\n",
+                context_path.read_text()[:12000],
+                "\n\n# README.md\n",
+                readme_path.read_text()[:12000],
+            ]
+        )
 
     def read_repo_file(relative_path: str, start_line: int = 1, end_line: int = 240) -> str:
-        """Read repo file slice. Good for focused review without full repo dump."""
+        """Read one text file slice under the repository root."""
 
-        path = _repo_file(relative_path)
+        path = _resolve_under(settings.repo_root, relative_path, require_exists=True)
+        if not path.is_file():
+            raise ValueError(f"not a file: {relative_path}")
         return _numbered_slice(path, start_line=start_line, end_line=end_line)
 
-    def list_repo_files(pattern: str = "src") -> str:
-        """List files. Use before asking for individual file slices."""
+    def list_repo_files(relative_dir: str = "src") -> list[str]:
+        """List files beneath one repository directory without shell expansion."""
 
-        args = ["find", pattern, "-type", "f"] if pattern != "." else ["find", ".", "-type", "f"]
-        return _run(args)
+        root = _resolve_under(settings.repo_root, relative_dir, require_exists=True)
+        if not root.is_dir():
+            raise ValueError(f"not a directory: {relative_dir}")
+        return sorted(str(path.relative_to(settings.repo_root)) for path in root.rglob("*") if path.is_file())
 
-    def run_readonly_repo_command(command: str) -> str:
-        """Run narrow read-only commands only.
+    def read_git_status() -> str:
+        """Read repository Git status."""
 
-        This is safer than exposing generic shell to all agents.
-        """
+        return _output(_run_completed(["git", "status", "--short"], settings.repo_root))
 
-        argv = shlex.split(command)
-        if not argv or not _readonly_allowed(argv):
-            raise ValueError(f"command not allowed in read-only tool: {command}")
-        return _run(argv)
+    def read_git_diff() -> str:
+        """Read repository Git diff without mutation."""
+
+        return _output(_run_completed(["git", "diff", "--"], settings.repo_root))
+
+    def read_git_log(limit: int = 10) -> str:
+        """Read a bounded recent Git log."""
+
+        if not 1 <= limit <= 50:
+            raise ValueError("limit must be between 1 and 50")
+        return _output(_run_completed(["git", "log", f"-{limit}", "--oneline"], settings.repo_root))
+
+    def run_pytest_targets(targets: list[str]) -> str:
+        """Run bounded pytest file targets under tests/ only."""
+
+        if not targets or len(targets) > 10:
+            raise ValueError("provide between 1 and 10 test targets")
+        normalized: list[str] = []
+        for target in targets:
+            if not target.startswith("tests/") or Path(target).suffix != ".py":
+                raise ValueError(f"test target not allowed: {target}")
+            path = _resolve_under(settings.repo_root, target, require_exists=True)
+            if not path.is_file():
+                raise ValueError(f"test target is not a file: {target}")
+            normalized.append(target)
+        return _output(_run_completed(["uv", "run", "pytest", "-q", *normalized], settings.repo_root))
 
     def create_branch_worktree(branch_name: str) -> str:
-        """Create isolated worktree for debugger.
-
-        Default off. Enable only when you trust harness behavior.
-        """
+        """Create a validated isolated worktree for debugger changes."""
 
         if not settings.enable_git_write:
-            return json.dumps(
-                {
-                    "status": "blocked",
-                    "reason": "git writes disabled",
-                }
-            )
-        settings.worktree_root.mkdir(parents=True, exist_ok=True)
-        worktree_path = (settings.worktree_root / branch_name).resolve()
+            return json.dumps({"status": "blocked", "reason": "git writes disabled"})
+        try:
+            safe_branch = _validate_branch_name(branch_name)
+        except ValueError as exc:
+            return json.dumps({"status": "error", "reason": str(exc), "branch_name": branch_name})
+
+        root = settings.worktree_root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        worktree_path = _resolve_under(root, safe_branch)
         if worktree_path.exists():
             return json.dumps(
                 {
                     "status": "blocked",
                     "reason": "worktree path already exists",
-                    "branch_name": branch_name,
+                    "branch_name": safe_branch,
                     "worktree_path": str(worktree_path),
                 }
             )
-        branch_check = _run_completed(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
-            cwd=settings.repo_root,
-        )
+        branch_check = _run_completed(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{safe_branch}"], settings.repo_root)
         if branch_check.returncode == 0:
             return json.dumps(
                 {
                     "status": "blocked",
                     "reason": "branch already exists",
-                    "branch_name": branch_name,
+                    "branch_name": safe_branch,
                     "worktree_path": str(worktree_path),
                 }
             )
         result = _run_completed(
-            [
-                "git",
-                "worktree",
-                "add",
-                "-b",
-                branch_name,
-                str(worktree_path),
-                settings.base_branch,
-            ],
-            cwd=settings.repo_root,
+            ["git", "worktree", "add", "-b", safe_branch, str(worktree_path), settings.base_branch],
+            settings.repo_root,
         )
-        output = ((result.stdout or "") + (result.stderr or "")).strip()
         if result.returncode != 0:
             return json.dumps(
                 {
                     "status": "error",
                     "reason": "git worktree add failed",
-                    "branch_name": branch_name,
+                    "branch_name": safe_branch,
                     "worktree_path": str(worktree_path),
-                    "output": output,
+                    "output": _output(result),
                 }
             )
-        return json.dumps({"status": "created", "branch_name": branch_name, "worktree_path": str(worktree_path), "output": output})
+        return json.dumps(
+            {
+                "status": "created",
+                "branch_name": safe_branch,
+                "worktree_path": str(worktree_path),
+                "output": _output(result),
+            }
+        )
 
     def read_worktree_file(worktree_path: str, relative_path: str, start_line: int = 1, end_line: int = 240) -> str:
-        """Read numbered file slice from isolated worktree."""
+        """Read an allowlisted worktree text file slice."""
 
-        path = _worktree_file(worktree_path, relative_path)
-        return _numbered_slice(path, start_line=start_line, end_line=end_line)
+        return _numbered_slice(_worktree_file(settings, worktree_path, relative_path), start_line, end_line)
 
     def read_worktree_diff(worktree_path: str) -> str:
-        """Read diff from isolated worktree for verifier review."""
+        """Read isolated-worktree diff stat."""
 
-        return _run(["git", "diff", "--stat"], cwd=_worktree_dir(worktree_path))
+        return _output(_run_completed(["git", "diff", "--stat"], _worktree_dir(settings, worktree_path)))
 
     def read_worktree_patch(worktree_path: str) -> str:
-        """Read full unified diff from isolated worktree."""
+        """Read isolated-worktree full patch."""
 
-        return _run(["git", "diff", "--"], cwd=_worktree_dir(worktree_path))
+        return _output(_run_completed(["git", "diff", "--"], _worktree_dir(settings, worktree_path)))
 
     def apply_worktree_text_edit(
         worktree_path: str,
@@ -239,126 +272,92 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         new_text: str | None = None,
         insert_text: str | None = None,
     ) -> str:
-        """Apply one bounded text edit inside isolated worktree.
-
-        Only existing allowlisted text files may be modified.
-        """
+        """Apply one bounded edit to an existing allowlisted worktree file."""
 
         if not settings.enable_git_write:
             return json.dumps({"status": "blocked", "relative_path": relative_path, "operation": op, "details": "git writes disabled"})
-
         try:
-            path = _worktree_file(worktree_path, relative_path)
+            path = _worktree_file(settings, worktree_path, relative_path)
             original = path.read_text()
-            updated = original
-
             if op == "replace_once":
                 if old_text is None or new_text is None:
                     raise ValueError("replace_once requires old_text and new_text")
-                if old_text not in updated:
+                if old_text not in original:
                     raise ValueError("old_text not found")
-                updated = updated.replace(old_text, new_text, 1)
+                updated = original.replace(old_text, new_text, 1)
             elif op == "insert_after":
                 if anchor_text is None or insert_text is None:
                     raise ValueError("insert_after requires anchor_text and insert_text")
-                if anchor_text not in updated:
+                if anchor_text not in original:
                     raise ValueError("anchor_text not found")
-                insert_at = updated.index(anchor_text) + len(anchor_text)
-                updated = updated[:insert_at] + insert_text + updated[insert_at:]
+                insert_at = original.index(anchor_text) + len(anchor_text)
+                updated = original[:insert_at] + insert_text + original[insert_at:]
             elif op == "append":
                 if insert_text is None:
                     raise ValueError("append requires insert_text")
-                updated = updated + insert_text
+                updated = original + insert_text
             else:
                 raise ValueError(f"unsupported operation: {op}")
-
             if updated == original:
-                return json.dumps(
-                    {
-                        "status": "no_change",
-                        "relative_path": relative_path,
-                        "operation": op,
-                        "details": "edit produced no change",
-                    }
-                )
-
+                return json.dumps({"status": "no_change", "relative_path": relative_path, "operation": op, "details": "edit produced no change"})
             path.write_text(updated)
-            return json.dumps(
-                {
-                    "status": "patched",
-                    "relative_path": relative_path,
-                    "operation": op,
-                    "details": "edit applied",
-                }
-            )
+            return json.dumps({"status": "patched", "relative_path": relative_path, "operation": op, "details": "edit applied"})
         except ValueError as exc:
-            return json.dumps(
-                {
-                    "status": "error",
-                    "relative_path": relative_path,
-                    "operation": op,
-                    "details": str(exc),
-                }
-            )
+            return json.dumps({"status": "error", "relative_path": relative_path, "operation": op, "details": str(exc)})
 
     def commit_worktree_changes(worktree_path: str, message: str) -> str:
-        """Commit changes in debugger worktree when writes are enabled."""
+        """Commit only changed allowlisted files in an isolated worktree."""
 
         if not settings.enable_git_write:
             return json.dumps({"status": "blocked", "reason": "git writes disabled"})
-        cwd = _worktree_dir(worktree_path)
-        add_result = _run_completed(["git", "add", "-A"], cwd=cwd)
+        try:
+            cwd = _worktree_dir(settings, worktree_path)
+        except ValueError as exc:
+            return json.dumps({"status": "error", "reason": str(exc)})
+        changed = {
+            line.strip()
+            for line in _output(_run_completed(["git", "diff", "--name-only"], cwd)).splitlines()
+            if line.strip()
+        }
+        changed.update(
+            line.strip()
+            for line in _output(_run_completed(["git", "ls-files", "--others", "--exclude-standard"], cwd)).splitlines()
+            if line.strip()
+        )
+        if not changed:
+            return json.dumps({"status": "blocked", "reason": "no changes"})
+        disallowed = sorted(path for path in changed if not _is_mutable_relative_path(path))
+        if disallowed:
+            return json.dumps({"status": "error", "reason": "changed files are not allowlisted", "files": disallowed})
+        add_result = _run_completed(["git", "add", "--", *sorted(changed)], cwd)
         if add_result.returncode != 0:
-            output = ((add_result.stdout or "") + (add_result.stderr or "")).strip()
-            return json.dumps({"status": "error", "reason": "git add failed", "output": output})
-        staged_check = _run_completed(["git", "diff", "--cached", "--quiet"], cwd=cwd)
+            return json.dumps({"status": "error", "reason": "git add failed", "output": _output(add_result)})
+        staged_check = _run_completed(["git", "diff", "--cached", "--quiet"], cwd)
         if staged_check.returncode == 0:
             return json.dumps({"status": "blocked", "reason": "no staged changes"})
-        commit_result = _run_completed(["git", "commit", "-m", message], cwd=cwd)
-        output = ((commit_result.stdout or "") + (commit_result.stderr or "")).strip()
+        commit_result = _run_completed(["git", "commit", "-m", message], cwd)
         if commit_result.returncode != 0:
-            return json.dumps({"status": "error", "reason": "git commit failed", "output": output})
-        sha = _run(["git", "rev-parse", "HEAD"], cwd=cwd)
-        return json.dumps({"status": "committed", "commit_sha": sha.strip(), "output": output})
-
-    def create_pull_request(worktree_path: str, title: str, body: str, base_branch: str | None = None) -> str:
-        """Open PR through gh CLI.
-
-        Default off because PR creation crosses repo boundary and needs auth.
-        """
-
-        if not settings.enable_prs:
-            return json.dumps({"status": "blocked", "reason": "PR creation disabled"})
-        args = ["gh", "pr", "create", "--title", title, "--body", body]
-        if base_branch:
-            args.extend(["--base", base_branch])
-        if settings.github_repo:
-            args.extend(["--repo", settings.github_repo])
-        result = _run_completed(args, cwd=_worktree_dir(worktree_path))
-        output = ((result.stdout or "") + (result.stderr or "")).strip()
-        if result.returncode != 0:
-            return json.dumps({"status": "error", "reason": "gh pr create failed", "output": output})
-        return json.dumps({"status": "opened", "output": output})
+            return json.dumps({"status": "error", "reason": "git commit failed", "output": _output(commit_result)})
+        sha = _output(_run_completed(["git", "rev-parse", "HEAD"], cwd))
+        return json.dumps({"status": "committed", "commit_sha": sha, "output": _output(commit_result)})
 
     live_evaluator = LiveRetrievalEvaluator()
 
     def run_live_retrieval_eval(objective: str, allow_live_mp: bool = False) -> dict[str, object]:
-        """Run one typed live retrieval eval for Retrieval Tester."""
+        """Run one typed live retrieval evaluation for Retrieval Tester."""
 
-        evidence = live_evaluator.evaluate(
-            LiveEvalInput(query=objective, allow_live_mp=allow_live_mp)
-        )
-        return evidence.model_dump(mode="json")
+        return live_evaluator.evaluate(LiveEvalInput(query=objective, allow_live_mp=allow_live_mp)).model_dump(mode="json")
 
     shared = [
         sdk.function_tool(read_context_snapshot),
         sdk.function_tool(read_repo_file),
         sdk.function_tool(list_repo_files),
-        sdk.function_tool(run_readonly_repo_command),
+        sdk.function_tool(read_git_status),
+        sdk.function_tool(read_git_diff),
+        sdk.function_tool(read_git_log),
+        sdk.function_tool(run_pytest_targets),
     ]
-    tester = list(shared) + [
-        sdk.function_tool(run_live_retrieval_eval),
-    ]
+    tester = list(shared) + [sdk.function_tool(run_live_retrieval_eval)]
     critic = list(shared)
     verifier = list(shared) + [
         sdk.function_tool(read_worktree_file),
@@ -370,7 +369,6 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         sdk.function_tool(read_worktree_file),
         sdk.function_tool(apply_worktree_text_edit),
         sdk.function_tool(commit_worktree_changes),
-        sdk.function_tool(create_pull_request),
         sdk.function_tool(read_worktree_diff),
         sdk.function_tool(read_worktree_patch),
     ]

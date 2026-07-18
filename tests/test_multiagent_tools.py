@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from matsci_agent.multiagent.settings import MultiAgentSettings
-from matsci_agent.multiagent.tools import build_tool_groups
+from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree
 
 
 class FakeSDK:
@@ -45,7 +45,6 @@ def _settings(repo: Path, tmp_path: Path, enable_git_write: bool = True) -> Mult
     return MultiAgentSettings(
         repo_root=repo,
         enable_git_write=enable_git_write,
-        enable_prs=False,
         base_branch="multi-agent",
         worktree_root=tmp_path / "worktrees",
     )
@@ -145,7 +144,7 @@ def test_mutation_tool_rejects_unsupported_suffix(tmp_path: Path):
         )
     )
     assert result["status"] == "error"
-    assert "file type not allowed" in result["details"]
+    assert "allowlisted" in result["details"]
 
 
 def test_mutation_tool_returns_error_for_missing_anchor_or_old_text(tmp_path: Path):
@@ -193,7 +192,7 @@ def test_commit_returns_blocked_when_no_changes_exist(tmp_path: Path):
 
     committed = json.loads(tools["commit_worktree_changes"](created["worktree_path"], "no changes"))
     assert committed["status"] == "blocked"
-    assert committed["reason"] == "no staged changes"
+    assert committed["reason"] == "no changes"
 
 
 def test_tool_groups_keep_mutation_limited_to_debugger(tmp_path: Path):
@@ -219,3 +218,68 @@ def test_tool_groups_keep_mutation_limited_to_debugger(tmp_path: Path):
     assert "run_live_retrieval_eval" not in critic_names
     assert "apply_worktree_text_edit" not in critic_names
     assert "read_worktree_patch" not in critic_names
+    assert "run_readonly_repo_command" not in debugger_names
+    assert "create_pull_request" not in debugger_names
+
+
+def test_structured_pytest_tool_rejects_shell_like_targets(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    groups = build_tool_groups(FakeSDK(), _settings(repo, tmp_path))
+    tools = _tool_map(groups.shared)
+
+    for target in ["tests/sample.py; touch /tmp/pwned", "../tests/sample.py", "src/module.py"]:
+        try:
+            tools["run_pytest_targets"]([target])
+        except ValueError as exc:
+            assert "not allowed" in str(exc)
+        else:
+            raise AssertionError(f"target unexpectedly accepted: {target}")
+
+
+def test_branch_name_rejects_traversal_and_absolute_paths(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
+
+    for branch_name in ["../escape", "nested/branch", "/tmp/escape", "retrieval..fix", "UPPER"]:
+        result = json.loads(tools["create_branch_worktree"](branch_name))
+        assert result["status"] == "error"
+
+
+def test_commit_rejects_unallowlisted_changed_files(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
+    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-unsafe"))
+    worktree_path = Path(created["worktree_path"])
+    (worktree_path / "README.md").write_text("unexpected change\n")
+
+    committed = json.loads(tools["commit_worktree_changes"](str(worktree_path), "unsafe"))
+
+    assert committed["status"] == "error"
+    assert committed["reason"] == "changed files are not allowlisted"
+    assert committed["files"] == ["README.md"]
+
+
+def test_cleanup_removes_clean_worktree_and_retains_branch(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    settings = _settings(repo, tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), settings).debugger)
+    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-cleanup"))
+
+    cleanup = cleanup_worktree(settings, created["worktree_path"])
+
+    assert cleanup["status"] == "removed"
+    assert not Path(created["worktree_path"]).exists()
+    assert _run(["git", "show-ref", "--verify", "refs/heads/retrieval-fix-cleanup"], repo).returncode == 0
+
+
+def test_cleanup_refuses_dirty_worktree(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    settings = _settings(repo, tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), settings).debugger)
+    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-dirty"))
+    Path(created["worktree_path"], "src/matsci_agent/module.py").write_text("VALUE = 9\n")
+
+    cleanup = cleanup_worktree(settings, created["worktree_path"])
+
+    assert cleanup["status"] == "blocked"
+    assert Path(created["worktree_path"]).exists()
