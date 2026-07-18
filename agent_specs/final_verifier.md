@@ -19,7 +19,7 @@ Review debugger output against tester + critic evidence.
 - did fix target correct module?
 - did it preserve deterministic shortlist logic?
 - did it add or require better eval coverage?
-- did it create branch/commit/PR cleanly when mutation mode enabled?
+- did it create branch/commit cleanly when mutation mode enabled?
 - does full patch match claimed fix with no unrelated edits?
 
 ## Output contract

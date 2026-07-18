@@ -521,11 +521,11 @@ class LLMConstraintParser:
             mp_filters.elements = list(required_elements)
         if mp_filters.exclude_elements == [] and banned_elements:
             mp_filters.exclude_elements = list(banned_elements)
-        if mp_filters.band_gap is None and (extracted_min_gap is not None or extracted_max_gap is not None):
-            mp_filters.band_gap = FloatRange(min=extracted_min_gap, max=extracted_max_gap)
+        if mp_filters.band_gap is None and (min_gap is not None or extracted_max_gap is not None):
+            mp_filters.band_gap = FloatRange(min=min_gap, max=extracted_max_gap)
         elif mp_filters.band_gap is not None:
-            if mp_filters.band_gap.min is None and extracted_min_gap is not None:
-                mp_filters.band_gap.min = extracted_min_gap
+            if mp_filters.band_gap.min is None and min_gap is not None:
+                mp_filters.band_gap.min = min_gap
             if mp_filters.band_gap.max is None and extracted_max_gap is not None:
                 mp_filters.band_gap.max = extracted_max_gap
         for field_name, label_pattern in {
@@ -543,6 +543,10 @@ class LLMConstraintParser:
                     current.min = lower
                 if current.max is None and upper is not None:
                     current.max = upper
+        if mp_filters.energy_above_hull is None and max_hull is not None:
+            mp_filters.energy_above_hull = FloatRange(max=max_hull)
+        elif mp_filters.energy_above_hull is not None and mp_filters.energy_above_hull.max is None and max_hull is not None:
+            mp_filters.energy_above_hull.max = max_hull
         parsed_top_k = self._coerce_top_k(raw.get("top_k"))
         requested_material_class = self._normalize_requested_material_class(raw.get("requested_material_class"))
         return ParsedDiscoveryIntent(

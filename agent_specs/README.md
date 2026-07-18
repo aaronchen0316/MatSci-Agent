@@ -9,10 +9,8 @@ Why:
 
 ## Architecture
 
-Manager-style orchestration:
-- Controller Agent
-  - owns final decision
-  - calls specialists in bounded order
+Python-owned orchestration:
+- Python schedules specialists in fixed order and owns retry/stop conditions.
 - Retrieval Tester Agent
   - grades retrieval quality from offline traces first
   - may run live MP evals only when explicitly enabled
@@ -20,7 +18,7 @@ Manager-style orchestration:
   - maps failure -> root cause -> owning module
 - Codex Debugger Agent
   - patches code in isolated worktree branch
-  - can commit and open PR only when env gates allow it
+  - can commit only when mutation mode is enabled
 - Final Verifier Agent
   - reviews debugger output
   - decides pass / fail / needs tester update
@@ -32,6 +30,7 @@ Manager-style orchestration:
 3. Give agents narrow tools, not generic unrestricted shell.
 4. Default to offline evals and read-only git behavior.
 5. Use one shared model client for all sub-agents.
+6. Final Verifier is final review gate; no Controller Agent exists.
 
 ## API key / proxy answer
 
@@ -65,12 +64,12 @@ Official docs:
 Default:
 - no live MP evals
 - no git writes
-- no PR creation
+- no branch push or PR creation
 
 Enable only when ready:
 - `MULTIAGENT_ENABLE_LIVE_MP=1`
 - `MULTIAGENT_ENABLE_GIT_WRITE=1`
-- `MULTIAGENT_ENABLE_PRS=1`
+- `MULTIAGENT_ARTIFACT_ROOT=artifacts/multiagent-runs`
 
 ## Install
 
@@ -82,6 +81,7 @@ uv sync --extra dev --extra agents
 
 ```bash
 uv run matsci-multiagent plan "Eval and repair retrieval quality for current code base"
+uv run matsci-multiagent eval-live
 ```
 
 Later, when ready to run real model calls:
@@ -92,3 +92,5 @@ export MULTIAGENT_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export MULTIAGENT_MODEL="gpt-5.4-mini"
 uv run matsci-multiagent run "Eval and repair retrieval quality for current code base"
 ```
+
+`eval-live` is intentionally opt-in. It needs MP and LLM credentials and writes evidence under the ignored artifact root.

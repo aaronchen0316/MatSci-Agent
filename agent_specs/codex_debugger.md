@@ -19,7 +19,8 @@ You patch retrieval-quality bugs with minimal change.
 - no broad refactor unless required
 - no silent behavior widening
 - no live calls unless harness explicitly allows them
-- no commit or PR unless tools confirm enabled
+- no commit unless mutation tools confirm enabled
+- never push branches or open PRs
 - if existing branch/worktree are provided, reuse them instead of creating a new repair branch
 - otherwise create worktree first, then inspect target file, then apply bounded edit, then inspect patch, then commit
 - edit only existing allowlisted files inside worktree
@@ -27,7 +28,6 @@ You patch retrieval-quality bugs with minimal change.
   - branch name
   - files touched
   - commit sha if committed
-  - PR URL if opened
 
 ## Output contract
 - `status`
@@ -35,6 +35,5 @@ You patch retrieval-quality bugs with minimal change.
 - `worktree_path`
 - `files_touched`
 - `commit_sha`
-- `pr_url`
 - `change_summary`
 - `follow_up_for_verifier`

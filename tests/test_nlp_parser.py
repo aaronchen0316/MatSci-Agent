@@ -104,3 +104,43 @@ def test_parser_keeps_unknown_when_no_strong_class_cue():
     parsed = parser.parse("Find materials with band gap above 2 eV")
 
     assert parsed.requested_material_class == "unknown"
+
+
+def test_llm_parser_preserves_nested_mp_filters_for_generic_screening():
+    parser = LLMConstraintParser(
+        inference_fn=lambda _goal: {
+            "mp_filters": {
+                "has_props": ["dielectric"],
+                "crystal_system": "cubic",
+                "formation_energy": {"max": -1.0},
+                "density": {"max": 5.0},
+                "volume": {"max": 150.0},
+            }
+        }
+    )
+
+    parsed = parser.parse("find cubic low-density dielectric materials")
+
+    assert parsed.constraints.mp_filters.has_props == ["dielectric"]
+    assert parsed.constraints.mp_filters.crystal_system == "cubic"
+    assert parsed.constraints.mp_filters.formation_energy.max == -1.0
+    assert parsed.constraints.mp_filters.density.max == 5.0
+    assert parsed.constraints.mp_filters.volume.max == 150.0
+
+
+def test_legacy_constraint_aliases_merge_into_nested_mp_filters():
+    parser = LLMConstraintParser(
+        inference_fn=lambda _goal: {
+            "required_elements": ["O"],
+            "banned_elements": ["Co"],
+            "min_band_gap_ev": 2.0,
+            "max_energy_above_hull": 0.05,
+        }
+    )
+
+    parsed = parser.parse("find oxides")
+
+    assert parsed.constraints.mp_filters.elements == ["O"]
+    assert parsed.constraints.mp_filters.exclude_elements == ["Co"]
+    assert parsed.constraints.mp_filters.band_gap.min == 2.0
+    assert parsed.constraints.mp_filters.energy_above_hull.max == 0.05

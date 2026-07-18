@@ -81,9 +81,12 @@ An external multi-agent supervision layer for evaluating and improving retrieval
 
 Expected behavior:
 - runs outside `DiscoveryWorkflow`
+- Python assigns specialist work in fixed order: Retrieval Tester -> Materials Query Critic -> Codex Debugger -> Final Verifier
+- Final Verifier is the final repair gate; there is no Controller Agent
 - uses `POST /discover/full` or equivalent local trace surface as evidence
 - treats retrieval quality as staged failures such as intent parse, Search Space Expansion, retrieval, Policy Filter, and final ranking
 - may open isolated git branches/worktrees for debugger changes
+- records non-secret run artifacts; removes clean temporary worktrees while retaining repair branches
 - should preserve the existing deterministic shortlist pipeline as source of truth
 
 ### Task Registry
