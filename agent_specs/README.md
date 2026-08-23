@@ -3,7 +3,7 @@
 This folder stores **agent specs and prompts**, not runtime Python packages.
 
 Why:
-- runtime code lives in `src/matsci_agent/multiagent/`
+- runtime tooling lives in `src/multiagent/`, outside product package `src/matsci_agent/`
 - prompt/spec files stay here in `agent_specs/`
 - naming makes intent explicit, avoids confusion with SDK import name `agents`
 
@@ -72,8 +72,9 @@ Enable only when ready:
 - `MULTIAGENT_ENABLE_LIVE_MP=1`
 - `MULTIAGENT_ENABLE_GIT_WRITE=1`
 - `MULTIAGENT_ARTIFACT_ROOT=artifacts/multiagent-runs`
-- `MULTIAGENT_REPAIR_BRANCH_PREFIX=retrieval-fix`
-- `MULTIAGENT_BASE_BRANCH=multi-agent`
+- `MULTIAGENT_REPAIR_BRANCH_PREFIX=fix`
+- `MULTIAGENT_TARGET_BASE_BRANCH=main`
+- optional `MULTIAGENT_TARGET_REPO=/path/to/product-repository`
 
 ## Install
 
@@ -100,14 +101,4 @@ uv run matsci-multiagent run "Eval and repair retrieval quality for current code
 
 `eval-live` is intentionally opt-in. It needs MP and LLM credentials and writes evidence under the ignored artifact root.
 
-`publish-pr` is separately opt-in through `GITHUB_TOKEN`. Production use requires the successful repair artifact:
-
-```bash
-uv run matsci-multiagent publish-pr retrieval-fix-1 --artifact-dir artifacts/multiagent-runs/<run-id>
-```
-
-Unsafe inspection branches require explicit validation-only draft wording and can never become merge-ready through this command:
-
-```bash
-uv run matsci-multiagent publish-pr retrieval-fix-retry --validation-only --reason "synthetic fixture branch"
-```
+Successful `repair-live` runs publish automatically: SSH pushes `fix/<issue>`, GitHub Actions validates the exact PR SHA, then the harness requests a squash merge to `main`. `GITHUB_TOKEN` is only used for GitHub API calls; no token is printed or stored in artifacts.

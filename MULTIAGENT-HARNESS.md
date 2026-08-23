@@ -59,7 +59,7 @@ Tester refresh feedback is typed and records whether it came from Critic or Fina
 
 The harness allows three total Tester/Critic review cycles. A requested refresh after cycle three ends with `review_cycle_exhausted`; an accepted patch never bypasses this limit.
 
-`repair-live --scenario <name>` binds the repair loop to one named live regression contract. Python injects the exact query and constraints into every Tester cycle, runs scoped evaluation from the active repair worktree, and rejects a retest that is blocked, fails, or misses scenario quality assertions.
+The harness runs from the tooling-only `multi-agent` branch, but evaluates a detached worktree from product `main`. `repair-live --scenario <name>` binds one live regression contract, creates only `fix/<issue>` worktrees from `main`, and injects the exact query and constraints into every Tester cycle. Scoped evaluation imports product `src/` before tooling `src/`, so evidence always covers `main` or the repaired product worktree.
 
 Production live repairs require deterministic test proof before Verifier acceptance can become useful:
 
@@ -72,8 +72,8 @@ Production live repairs require deterministic test proof before Verifier accepta
 ## Artifacts and Safety
 Each run writes non-secret typed inputs, reports, evaluator evidence, patch/commit evidence, and cleanup results under ignored `artifacts/multiagent-runs/<run-id>/`.
 
-Default mode is read-only and offline. Live MP evaluation and Git writes are independent opt-ins. Normal `run` never pushes branches or opens pull requests.
+Default mode is read-only and offline. Live MP evaluation and Git writes are independent opt-ins. Normal `run` never pushes, opens PRs, or merges; only fully passing `repair-live` can publish a product repair.
 
-`publish-pr` is a separate explicit command. Production publication requires a clean base checkout, a repair branch descended from `MULTIAGENT_BASE_BRANCH`, successful stored live-repair evidence, clean diff, and a fresh full local suite. It pushes only that branch and creates a draft PR to the base branch using `GITHUB_TOKEN`; GitHub Actions remains required before a human merge. `--validation-only --reason ...` may create a conspicuously non-mergeable draft for unsafe inspection branches such as `retrieval-fix-retry`.
+After a repaired live scenario passes every gate, `repair-live` pushes its product-only `fix/<issue>` branch through SSH, creates a ready PR to `main`, waits for GitHub Actions on that exact head SHA, then requests a squash merge through the GitHub API. Any failed or timed-out gate retains the branch and artifacts without merging. `GITHUB_TOKEN` is used only for GitHub API calls and needs Contents plus Pull requests read/write permission; SSH remains the push transport.
 
 Worktree tools require a registered Git worktree below the configured worktree root. File mutations reject traversal even when an input begins with an allowlisted prefix; structured pytest targets must resolve under `tests/`.

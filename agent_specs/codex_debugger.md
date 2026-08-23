@@ -22,8 +22,8 @@ You patch retrieval-quality bugs with minimal change.
 - no commit unless mutation tools confirm enabled
 - never push branches or open PRs
 - if existing branch/worktree are provided, reuse them instead of creating a new repair branch
-- otherwise create worktree first, then inspect target file, then apply bounded edit, then inspect patch, then commit
-- edit only existing allowlisted files inside worktree
+- otherwise create a unique `fix/<issue>` worktree from product `main`, then inspect target file, apply bounded edit, inspect patch, then commit
+- edit only existing product files under `src/matsci_agent/` or regression tests under `tests/`; never edit harness/tooling files or prompts
 - add or modify focused regression tests for every production repair; never delete, rename, duplicate, or weaken tests
 - run exact changed test files before commit and report them verbatim
 - leave clear artifact:
