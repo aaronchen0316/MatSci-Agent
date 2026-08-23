@@ -57,6 +57,8 @@ def _coverage(repo_root: Path, output_path: Path) -> tuple[dict[str, float], str
         [
             "uv",
             "run",
+            "--extra",
+            "dev",
             "pytest",
             "-q",
             "--cov=src/matsci_agent",
@@ -134,8 +136,8 @@ def validate_repair_test_evidence(
     targeted_output = ""
     full_output = ""
     if not issues:
-        collect = _run(["uv", "run", "pytest", "--collect-only", "-q", *normalized_targets], repo_root)
-        targeted = _run(["uv", "run", "pytest", "-q", *normalized_targets], repo_root)
+        collect = _run(["uv", "run", "--extra", "dev", "pytest", "--collect-only", "-q", *normalized_targets], repo_root)
+        targeted = _run(["uv", "run", "--extra", "dev", "pytest", "-q", *normalized_targets], repo_root)
         targeted_output = _output(collect) + "\n" + _output(targeted)
         if collect.returncode != 0:
             issues.append("changed tests do not collect")

@@ -53,7 +53,7 @@ def _run_branch_suite(settings: MultiAgentSettings, branch_name: str) -> tuple[b
     if add.returncode != 0:
         return False, f"unable to create CI worktree: {_output(add)}"
     try:
-        result = _run(["uv", "run", "pytest", "-q"], worktree)
+        result = _run(["uv", "run", "--extra", "dev", "pytest", "-q"], worktree)
         return result.returncode == 0, _output(result)
     finally:
         _run(["git", "worktree", "remove", "--force", str(worktree)], settings.repo_root)
