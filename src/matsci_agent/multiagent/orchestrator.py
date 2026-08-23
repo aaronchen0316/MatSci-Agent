@@ -189,18 +189,23 @@ class MultiAgentHarness:
                 assertion_failures = scenario_assertion_failures(scenario, live_evidence)
                 if live_evidence.query != scenario.query:
                     assertion_failures.append("scoped evaluator query did not match requested scenario")
-                forced_status = tester_report.status
+                forced_status = "pass"
                 forced_summary = tester_report.summary
+                forced_stage = None
                 if live_evidence.status == "blocked":
                     forced_status = "blocked"
                     forced_summary = live_evidence.blocked_reason or "required live scenario evaluation blocked"
+                    forced_stage = live_evidence.failed_stage or tester_report.failed_stage
                 elif live_evidence.status == "fail" or assertion_failures:
                     forced_status = "fail"
                     forced_summary = "; ".join(assertion_failures) or f"live scenario failed at {live_evidence.failed_stage or 'unknown'}"
+                    forced_stage = live_evidence.failed_stage or tester_report.failed_stage
+                elif tester_report.status != "pass":
+                    forced_summary = "Scoped live scenario evaluation passed; tester status normalized to typed evaluator evidence."
                 tester_report = tester_report.model_copy(
                     update={
                         "status": forced_status,
-                        "failed_stage": live_evidence.failed_stage or tester_report.failed_stage,
+                        "failed_stage": forced_stage,
                         "summary": forced_summary,
                         "live_evaluation": live_evidence,
                         "evidence": {

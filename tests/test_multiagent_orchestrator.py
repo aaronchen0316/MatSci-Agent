@@ -425,6 +425,30 @@ def test_live_scenario_repair_blocks_after_failed_deterministic_test_evidence(tm
     assert verifier_calls[0].repair_test_evidence.status == "fail"
 
 
+def test_live_scenario_uses_scoped_pass_when_tester_reports_blocked(tmp_path: Path):
+    scenario = get_live_scenario("volume")
+    tester_calls: list[RetrievalTesterInput] = []
+    harness = _make_harness(
+        tmp_path,
+        tester_results=[_tester_report("blocked", "agent tool error")],
+        critic_results=[_critic_report("agree")],
+        tester_calls=tester_calls,
+    )
+    harness.scenario_evaluator = lambda _settings, _payload: _live_evidence().model_copy(
+        update={
+            "query": scenario.query,
+            "result_counts": StageCounts(raw_count=1, filtered_count=1, ranked_count=1),
+        }
+    )
+
+    report = asyncio.run(harness.run(scenario.query, scenario=scenario))
+
+    assert report.status == "pass"
+    assert report.latest_tester_report is not None
+    assert report.latest_tester_report.status == "pass"
+    assert tester_calls[0].live_evaluation_input is not None
+
+
 def test_accepted_patch_on_third_cycle_exhausts_validation_budget(tmp_path: Path):
     harness = _make_harness(
         tmp_path,
