@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
-from matsci_agent.multiagent.schemas import LiveEvalInput
+from matsci_agent.multiagent.schemas import LiveEvalEvidence, LiveEvalInput
 from matsci_agent.multiagent.settings import MultiAgentSettings
 
 _BRANCH_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_RESERVED_BRANCH_NAMES = {"head", "fetch_head", "orig_head"}
+_SCOPED_EVAL_TIMEOUT_SECONDS = 180
 _MUTABLE_PATH_PREFIXES = (
     "src/matsci_agent/",
     "tests/",
@@ -49,6 +52,8 @@ def _validate_branch_name(branch_name: str) -> str:
         raise ValueError("branch_name must be a safe single path segment")
     if branch_name in {".", ".."} or ".." in branch_name:
         raise ValueError("branch_name must not contain traversal segments")
+    if branch_name in _RESERVED_BRANCH_NAMES or branch_name.endswith((".", ".lock")):
+        raise ValueError("branch_name is reserved or invalid")
     return branch_name
 
 
@@ -64,22 +69,50 @@ def _resolve_under(root: Path, candidate: str, *, require_exists: bool = False) 
     return resolved
 
 
+def _normalized_relative_path(relative_path: str) -> str | None:
+    if not relative_path:
+        return None
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        return None
+    normalized = path.as_posix()
+    return normalized if normalized not in {"", "."} else None
+
+
+def _is_under(root: Path, path: Path) -> bool:
+    return root == path or root in path.parents
+
+
+def _registered_worktree_paths(settings: MultiAgentSettings) -> set[Path]:
+    result = _run_completed(["git", "worktree", "list", "--porcelain"], settings.repo_root)
+    if result.returncode != 0:
+        raise ValueError("unable to list registered git worktrees")
+    return {
+        Path(line.removeprefix("worktree ")).resolve()
+        for line in (result.stdout or "").splitlines()
+        if line.startswith("worktree ")
+    }
+
+
 def _worktree_dir(settings: MultiAgentSettings, worktree_path: str) -> Path:
     root = settings.worktree_root.resolve()
     path = Path(worktree_path).resolve()
-    if root not in path.parents:
+    if not _is_under(root, path) or root == path:
         raise ValueError(f"worktree path escapes configured root: {worktree_path}")
     if not path.is_dir():
         raise ValueError(f"worktree path does not exist: {worktree_path}")
+    if path not in _registered_worktree_paths(settings):
+        raise ValueError(f"worktree path is not a registered git worktree: {worktree_path}")
     return path
 
 
 def _is_mutable_relative_path(relative_path: str) -> bool:
-    path = Path(relative_path)
+    normalized = _normalized_relative_path(relative_path)
+    if normalized is None:
+        return False
+    path = Path(normalized)
     return (
-        bool(relative_path)
-        and not path.is_absolute()
-        and any(relative_path.startswith(prefix) for prefix in _MUTABLE_PATH_PREFIXES)
+        any(normalized.startswith(prefix) for prefix in _MUTABLE_PATH_PREFIXES)
         and path.suffix in _MUTABLE_SUFFIXES
     )
 
@@ -126,6 +159,37 @@ def cleanup_worktree(settings: MultiAgentSettings, worktree_path: str) -> dict[s
     if result.returncode != 0:
         return {"status": "failed", "reason": "git worktree remove failed", "output": _output(result)}
     return {"status": "removed", "worktree_path": str(cwd)}
+
+
+def _run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalInput) -> LiveEvalEvidence:
+    env = os.environ.copy()
+    source_root = str((settings.repo_root / "src").resolve())
+    inherited_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = source_root if not inherited_pythonpath else os.pathsep.join((source_root, inherited_pythonpath))
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "matsci_agent.multiagent.scoped_evaluator"],
+            cwd=str(settings.repo_root),
+            input=payload.model_dump_json(),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_SCOPED_EVAL_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return LiveEvalEvidence(status="blocked", query=payload.query, blocked_reason="scoped evaluator timed out")
+    except OSError as exc:
+        return LiveEvalEvidence(status="blocked", query=payload.query, blocked_reason=f"scoped evaluator failed: {type(exc).__name__}")
+
+    try:
+        return LiveEvalEvidence.model_validate_json(result.stdout)
+    except Exception:
+        return LiveEvalEvidence(
+            status="blocked",
+            query=payload.query,
+            blocked_reason=f"scoped evaluator returned invalid output (exit {result.returncode})",
+        )
 
 
 def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
@@ -183,14 +247,16 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
 
         if not targets or len(targets) > 10:
             raise ValueError("provide between 1 and 10 test targets")
+        tests_root = (settings.repo_root / "tests").resolve()
         normalized: list[str] = []
         for target in targets:
-            if not target.startswith("tests/") or Path(target).suffix != ".py":
+            normalized_target = _normalized_relative_path(target)
+            if normalized_target is None or not normalized_target.startswith("tests/") or Path(normalized_target).suffix != ".py":
                 raise ValueError(f"test target not allowed: {target}")
-            path = _resolve_under(settings.repo_root, target, require_exists=True)
-            if not path.is_file():
+            path = _resolve_under(settings.repo_root, normalized_target, require_exists=True)
+            if not path.is_file() or not _is_under(tests_root, path) or path == tests_root:
                 raise ValueError(f"test target is not a file: {target}")
-            normalized.append(target)
+            normalized.append(str(path.relative_to(settings.repo_root)))
         return _output(_run_completed(["uv", "run", "pytest", "-q", *normalized], settings.repo_root))
 
     def create_branch_worktree(branch_name: str) -> str:
@@ -315,14 +381,14 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         except ValueError as exc:
             return json.dumps({"status": "error", "reason": str(exc)})
         changed = {
-            line.strip()
-            for line in _output(_run_completed(["git", "diff", "--name-only"], cwd)).splitlines()
-            if line.strip()
+            path
+            for path in _run_completed(["git", "diff", "--name-only", "-z"], cwd).stdout.split("\0")
+            if path
         }
         changed.update(
-            line.strip()
-            for line in _output(_run_completed(["git", "ls-files", "--others", "--exclude-standard"], cwd)).splitlines()
-            if line.strip()
+            path
+            for path in _run_completed(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd).stdout.split("\0")
+            if path
         )
         if not changed:
             return json.dumps({"status": "blocked", "reason": "no changes"})
@@ -341,12 +407,11 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         sha = _output(_run_completed(["git", "rev-parse", "HEAD"], cwd))
         return json.dumps({"status": "committed", "commit_sha": sha, "output": _output(commit_result)})
 
-    live_evaluator = LiveRetrievalEvaluator()
-
     def run_live_retrieval_eval(objective: str, allow_live_mp: bool = False) -> dict[str, object]:
-        """Run one typed live retrieval evaluation for Retrieval Tester."""
+        """Run one typed live retrieval evaluation in the active checkout."""
 
-        return live_evaluator.evaluate(LiveEvalInput(query=objective, allow_live_mp=allow_live_mp)).model_dump(mode="json")
+        payload = LiveEvalInput(query=objective, allow_live_mp=allow_live_mp)
+        return _run_scoped_live_evaluation(settings, payload).model_dump(mode="json")
 
     shared = [
         sdk.function_tool(read_context_snapshot),

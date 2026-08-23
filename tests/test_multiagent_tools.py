@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import matsci_agent.multiagent.tools as harness_tools
+from matsci_agent.multiagent.schemas import LiveEvalEvidence, LiveEvalInput
 from matsci_agent.multiagent.settings import MultiAgentSettings
 from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree
 
@@ -32,6 +34,7 @@ def _make_repo(tmp_path: Path) -> Path:
     (repo / "src" / "matsci_agent" / "module.py").write_text("VALUE = 1\n\ndef answer():\n    return VALUE\n")
     (repo / "src" / "matsci_agent" / "data.csv").write_text("a,b\n1,2\n")
     (repo / "tests" / "sample.txt").write_text("alpha\n")
+    (repo / "tests" / "sample.py").write_text("def test_sample():\n    assert True\n")
     (repo / "agent_specs" / "sample.md").write_text("# Sample\n")
     _run(["git", "init", "-b", "multi-agent"], cwd=repo)
     _run(["git", "config", "user.name", "Test User"], cwd=repo)
@@ -126,6 +129,24 @@ def test_mutation_tool_rejects_path_traversal(tmp_path: Path):
             insert_text="oops\n",
         )
     )
+    assert result["status"] == "error"
+    assert "allowlisted" in result["details"]
+
+
+def test_mutation_tool_rejects_traversal_hidden_by_allowed_prefix(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
+    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-prefix-traversal"))
+
+    result = json.loads(
+        tools["apply_worktree_text_edit"](
+            created["worktree_path"],
+            "src/matsci_agent/../../README.md",
+            "append",
+            insert_text="oops\n",
+        )
+    )
+
     assert result["status"] == "error"
     assert "allowlisted" in result["details"]
 
@@ -227,7 +248,12 @@ def test_structured_pytest_tool_rejects_shell_like_targets(tmp_path: Path):
     groups = build_tool_groups(FakeSDK(), _settings(repo, tmp_path))
     tools = _tool_map(groups.shared)
 
-    for target in ["tests/sample.py; touch /tmp/pwned", "../tests/sample.py", "src/module.py"]:
+    for target in [
+        "tests/sample.py; touch /tmp/pwned",
+        "tests/../src/matsci_agent/module.py",
+        "../tests/sample.py",
+        "src/module.py",
+    ]:
         try:
             tools["run_pytest_targets"]([target])
         except ValueError as exc:
@@ -240,9 +266,67 @@ def test_branch_name_rejects_traversal_and_absolute_paths(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
 
-    for branch_name in ["../escape", "nested/branch", "/tmp/escape", "retrieval..fix", "UPPER"]:
+    for branch_name in [
+        "../escape",
+        "nested/branch",
+        "/tmp/escape",
+        "retrieval..fix",
+        "UPPER",
+        "head",
+        "repair.lock",
+        "repair;touch-pwned",
+        "$(touch-pwned)",
+    ]:
         result = json.loads(tools["create_branch_worktree"](branch_name))
         assert result["status"] == "error"
+
+
+def test_worktree_tools_reject_unregistered_directory_and_symlink_escape(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    settings = _settings(repo, tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), settings).debugger)
+    rogue = settings.worktree_root / "rogue"
+    (rogue / "src" / "matsci_agent").mkdir(parents=True)
+    (rogue / "src" / "matsci_agent" / "module.py").write_text("VALUE = 2\n")
+
+    try:
+        tools["read_worktree_file"](str(rogue), "src/matsci_agent/module.py")
+    except ValueError as exc:
+        assert "registered git worktree" in str(exc)
+    else:
+        raise AssertionError("unregistered directory unexpectedly accepted")
+
+    escaped = settings.worktree_root / "escaped"
+    escaped.parent.mkdir(parents=True, exist_ok=True)
+    escaped.symlink_to(repo, target_is_directory=True)
+    try:
+        tools["read_worktree_file"](str(escaped), "src/matsci_agent/module.py")
+    except ValueError as exc:
+        assert "escapes configured root" in str(exc)
+    else:
+        raise AssertionError("symlink escape unexpectedly accepted")
+
+
+def test_scoped_live_evaluator_executes_from_active_repo_root(monkeypatch, tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    settings = _settings(repo, tmp_path)
+    observed: dict[str, object] = {}
+    expected = LiveEvalEvidence(status="blocked", query="find oxides", blocked_reason="fixture")
+
+    def fake_run(args, **kwargs):
+        observed["args"] = args
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, expected.model_dump_json(), "")
+
+    monkeypatch.setattr(harness_tools.subprocess, "run", fake_run)
+
+    result = harness_tools._run_scoped_live_evaluation(settings, LiveEvalInput(query="find oxides", allow_live_mp=True))
+
+    assert result == expected
+    assert observed["args"] == [harness_tools.sys.executable, "-m", "matsci_agent.multiagent.scoped_evaluator"]
+    assert observed["cwd"] == str(repo)
+    assert str(observed["env"]["PYTHONPATH"]).split(":")[0] == str((repo / "src").resolve())
+    assert '"allow_live_mp":true' in str(observed["input"])
 
 
 def test_commit_rejects_unallowlisted_changed_files(tmp_path: Path):
