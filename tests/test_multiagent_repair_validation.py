@@ -76,15 +76,19 @@ def test_repair_validation_rejects_per_file_coverage_regression(monkeypatch, tmp
     _run(["git", "commit", "-m", "coverage regression"], repo)
 
     real_run = repair_validation._run
-    commands: list[list[str]] = []
+    pytest_commands: list[list[str]] = []
 
     def fake_run(args, cwd):
-        commands.append(args)
         if args[0] == "git":
             return real_run(args, cwd)
         return subprocess.CompletedProcess(args, 0, "1 passed", "")
 
+    def fake_pytest(args, _cwd, _environment_path):
+        pytest_commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "1 passed", "")
+
     monkeypatch.setattr(repair_validation, "_run", fake_run)
+    monkeypatch.setattr(repair_validation, "_run_pytest", fake_pytest)
     monkeypatch.setattr(
         repair_validation,
         "_baseline_coverage",
@@ -106,4 +110,4 @@ def test_repair_validation_rejects_per_file_coverage_regression(monkeypatch, tmp
     assert evidence.status == "fail"
     assert evidence.coverage_regressions == ["src/matsci_agent/module.py: 90.00% -> 80.00%"]
     assert "changed production-file coverage decreased" in evidence.issues
-    assert any(command[:5] == ["uv", "run", "--extra", "dev", "pytest"] for command in commands)
+    assert any(command[:5] == ["uv", "run", "--extra", "dev", "pytest"] for command in pytest_commands)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,6 +13,12 @@ from matsci_agent.multiagent.settings import MultiAgentSettings
 
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False)
+
+
+def _run_pytest(args: list[str], cwd: Path, environment_path: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["UV_PROJECT_ENVIRONMENT"] = str(environment_path)
+    return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False, env=env)
 
 
 def _output(result: subprocess.CompletedProcess[str]) -> str:
@@ -52,8 +59,8 @@ def _changed_paths(repo_root: Path, base_branch: str) -> tuple[list[str], list[s
     return sorted(set(sources)), sorted(set(tests)), sorted(set(removed_tests))
 
 
-def _coverage(repo_root: Path, output_path: Path) -> tuple[dict[str, float], str]:
-    result = _run(
+def _coverage(repo_root: Path, output_path: Path, environment_path: Path) -> tuple[dict[str, float], str]:
+    result = _run_pytest(
         [
             "uv",
             "run",
@@ -65,6 +72,7 @@ def _coverage(repo_root: Path, output_path: Path) -> tuple[dict[str, float], str
             f"--cov-report=json:{output_path}",
         ],
         repo_root,
+        environment_path,
     )
     output = _output(result)
     if result.returncode != 0 or not output_path.is_file():
@@ -86,7 +94,12 @@ def _coverage(repo_root: Path, output_path: Path) -> tuple[dict[str, float], str
     return values, output
 
 
-def _baseline_coverage(settings: MultiAgentSettings, base_branch: str, output_path: Path) -> tuple[dict[str, float], str, str | None]:
+def _baseline_coverage(
+    settings: MultiAgentSettings,
+    base_branch: str,
+    output_path: Path,
+    environment_path: Path,
+) -> tuple[dict[str, float], str, str | None]:
     root = settings.worktree_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     baseline = root / f".coverage-base-{uuid4().hex[:12]}"
@@ -94,7 +107,7 @@ def _baseline_coverage(settings: MultiAgentSettings, base_branch: str, output_pa
     if add.returncode != 0:
         return {}, "", f"unable to create baseline worktree: {_output(add)}"
     try:
-        coverage, output = _coverage(baseline, output_path)
+        coverage, output = _coverage(baseline, output_path, environment_path)
         if not coverage:
             return {}, output, "baseline coverage command failed"
         return coverage, output, None
@@ -135,27 +148,39 @@ def validate_repair_test_evidence(
 
     targeted_output = ""
     full_output = ""
-    if not issues:
-        collect = _run(["uv", "run", "--extra", "dev", "pytest", "--collect-only", "-q", *normalized_targets], repo_root)
-        targeted = _run(["uv", "run", "--extra", "dev", "pytest", "-q", *normalized_targets], repo_root)
-        targeted_output = _output(collect) + "\n" + _output(targeted)
-        if collect.returncode != 0:
-            issues.append("changed tests do not collect")
-        if targeted.returncode != 0:
-            issues.append("changed tests do not pass")
-
     coverage_before: dict[str, float] = {}
     coverage_after: dict[str, float] = {}
     regressions: list[str] = []
     with tempfile.TemporaryDirectory(prefix="matsci-repair-coverage-") as directory:
         temporary = Path(directory)
         if not issues:
+            collect = _run_pytest(
+                ["uv", "run", "--extra", "dev", "pytest", "--collect-only", "-q", *normalized_targets],
+                repo_root,
+                temporary / "targeted-env",
+            )
+            targeted = _run_pytest(
+                ["uv", "run", "--extra", "dev", "pytest", "-q", *normalized_targets],
+                repo_root,
+                temporary / "targeted-env",
+            )
+            targeted_output = _output(collect) + "\n" + _output(targeted)
+            if collect.returncode != 0:
+                issues.append("changed tests do not collect")
+            if targeted.returncode != 0:
+                issues.append("changed tests do not pass")
+        if not issues:
             coverage_before, baseline_output, baseline_error = _baseline_coverage(
                 settings,
                 settings.base_branch,
                 temporary / "baseline.json",
+                temporary / "baseline-env",
             )
-            coverage_after, repair_coverage_output = _coverage(repo_root, temporary / "repair.json")
+            coverage_after, repair_coverage_output = _coverage(
+                repo_root,
+                temporary / "repair.json",
+                temporary / "repair-env",
+            )
             full_output = "\n".join(item for item in [baseline_output, repair_coverage_output] if item)
             if baseline_error:
                 issues.append(baseline_error)
