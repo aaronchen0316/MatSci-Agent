@@ -70,6 +70,25 @@ LIVE_EVAL_SCENARIOS: tuple[LiveEvalScenario, ...] = (
 )
 
 
+def get_live_scenario(name: str) -> LiveEvalScenario:
+    for scenario in LIVE_EVAL_SCENARIOS:
+        if scenario.name == name:
+            return scenario
+    allowed = ", ".join(scenario.name for scenario in LIVE_EVAL_SCENARIOS)
+    raise ValueError(f"unknown live scenario: {name}. Allowed values: {allowed}")
+
+
+def scenario_assertion_failures(scenario: LiveEvalScenario, evidence) -> list[str]:
+    failures: list[str] = []
+    if evidence.status == "pass" and not evidence.real_source_used:
+        failures.append("real Materials Project source was not used")
+    if evidence.status == "pass" and evidence.result_counts.ranked_count < scenario.min_ranked_count:
+        failures.append(f"ranked count below minimum {scenario.min_ranked_count}")
+    if evidence.status == "pass" and scenario.require_target_quality and evidence.result_counts.search_space_target_count == 0:
+        failures.append("Search Space Expansion returned no targets")
+    return failures
+
+
 def run_live_suite(
     settings: MultiAgentSettings,
     *,
@@ -87,17 +106,10 @@ def run_live_suite(
                 allow_live_mp=settings.enable_live_mp,
             )
         )
-        failures: list[str] = []
-        if evidence.status == "pass" and not evidence.real_source_used:
-            failures.append("real Materials Project source was not used")
-        if evidence.status == "pass" and evidence.result_counts.ranked_count < scenario.min_ranked_count:
-            failures.append(f"ranked count below minimum {scenario.min_ranked_count}")
-        if evidence.status == "pass" and scenario.require_target_quality and evidence.result_counts.search_space_target_count == 0:
-            failures.append("Search Space Expansion returned no targets")
         result = LiveEvalScenarioResult(
             scenario=scenario,
             evidence=evidence,
-            assertion_failures=failures,
+            assertion_failures=scenario_assertion_failures(scenario, evidence),
         )
         results.append(result)
         store.write_model(f"scenarios/{scenario.name}.json", result)

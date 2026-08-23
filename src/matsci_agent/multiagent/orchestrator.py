@@ -7,6 +7,8 @@ from typing import Any
 
 from matsci_agent.multiagent.artifacts import HarnessArtifactStore
 from matsci_agent.multiagent.factory import AgentRegistry, build_agent_registry
+from matsci_agent.multiagent.live_suite import scenario_assertion_failures
+from matsci_agent.multiagent.repair_validation import validate_repair_test_evidence
 from matsci_agent.multiagent.schemas import (
     CodexDebuggerInput,
     CodexDebuggerReport,
@@ -15,15 +17,19 @@ from matsci_agent.multiagent.schemas import (
     HarnessAttemptRecord,
     HarnessRunReport,
     HarnessStopReason,
+    LiveEvalEvidence,
+    LiveEvalInput,
+    LiveEvalScenario,
     MaterialsQueryCriticInput,
     MaterialsQueryCriticReport,
     RefreshFeedback,
     RetrievalTesterInput,
     RetrievalTesterReport,
+    RepairTestEvidence,
 )
 from matsci_agent.multiagent.sdk import configure_sdk
 from matsci_agent.multiagent.settings import MultiAgentSettings
-from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree, worktree_evidence
+from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree, run_scoped_live_evaluation, worktree_evidence
 
 _MAX_REVIEW_CYCLES = 3
 
@@ -38,6 +44,15 @@ class MultiAgentHarness:
     codex_debugger_runner: Callable[[CodexDebuggerInput], Awaitable[CodexDebuggerReport]]
     final_verifier_runner: Callable[[FinalVerifierInput], Awaitable[FinalVerifierReport]]
     runtime_rebinder: Callable[[Path], None] | None = None
+    scenario_evaluator: Callable[[MultiAgentSettings, LiveEvalInput], LiveEvalEvidence] = run_scoped_live_evaluation
+    repair_test_validator: Callable[[MultiAgentSettings, Path, list[str], list[str]], RepairTestEvidence] = (
+        lambda settings, worktree_path, test_files, test_targets: validate_repair_test_evidence(
+            settings,
+            worktree_path,
+            declared_test_files=test_files,
+            declared_test_targets=test_targets,
+        )
+    )
 
     @classmethod
     def build(cls, settings: MultiAgentSettings | None = None) -> "MultiAgentHarness":
@@ -100,7 +115,7 @@ class MultiAgentHarness:
         harness.runtime_rebinder = rebind_runtime
         return harness
 
-    async def run(self, objective: str) -> HarnessRunReport:
+    async def run(self, objective: str, *, scenario: LiveEvalScenario | None = None) -> HarnessRunReport:
         store = HarnessArtifactStore.create(self.settings, objective)
         attempts: list[HarnessAttemptRecord] = []
         refresh_feedback: RefreshFeedback | None = None
@@ -109,7 +124,9 @@ class MultiAgentHarness:
         latest_tester: RetrievalTesterReport | None = None
         latest_critic: MaterialsQueryCriticReport | None = None
         latest_debugger: CodexDebuggerReport | None = None
+        latest_repair_test_evidence: RepairTestEvidence | None = None
         latest_verifier: FinalVerifierReport | None = None
+        active_repo_root = self.settings.repo_root
 
         def finish(
             *,
@@ -136,6 +153,7 @@ class MultiAgentHarness:
                 latest_tester=latest_tester,
                 latest_critic=latest_critic,
                 latest_debugger=latest_debugger,
+                latest_repair_test_evidence=latest_repair_test_evidence,
                 latest_verifier=latest_verifier,
                 branch_name=branch_name,
                 worktree_path=worktree_path,
@@ -150,9 +168,48 @@ class MultiAgentHarness:
                 objective=objective,
                 refresh_feedback=refresh_feedback,
                 allow_live_mp=self.settings.enable_live_mp,
+                live_evaluation_input=(
+                    LiveEvalInput(
+                        query=scenario.query,
+                        constraints=scenario.constraints,
+                        allow_live_mp=True,
+                    )
+                    if scenario
+                    else None
+                ),
+                scenario_name=scenario.name if scenario else None,
             )
             store.write_model(f"attempts/{attempt_number}/retrieval_tester_input.json", tester_input)
             tester_report = await self.retrieval_tester_runner(tester_input)
+            if scenario is not None:
+                live_evidence = self.scenario_evaluator(
+                    replace(self.settings, repo_root=active_repo_root),
+                    tester_input.live_evaluation_input,
+                )
+                assertion_failures = scenario_assertion_failures(scenario, live_evidence)
+                if live_evidence.query != scenario.query:
+                    assertion_failures.append("scoped evaluator query did not match requested scenario")
+                forced_status = tester_report.status
+                forced_summary = tester_report.summary
+                if live_evidence.status == "blocked":
+                    forced_status = "blocked"
+                    forced_summary = live_evidence.blocked_reason or "required live scenario evaluation blocked"
+                elif live_evidence.status == "fail" or assertion_failures:
+                    forced_status = "fail"
+                    forced_summary = "; ".join(assertion_failures) or f"live scenario failed at {live_evidence.failed_stage or 'unknown'}"
+                tester_report = tester_report.model_copy(
+                    update={
+                        "status": forced_status,
+                        "failed_stage": live_evidence.failed_stage or tester_report.failed_stage,
+                        "summary": forced_summary,
+                        "live_evaluation": live_evidence,
+                        "evidence": {
+                            **tester_report.evidence,
+                            "scenario_name": scenario.name,
+                            "scenario_assertion_failures": assertion_failures,
+                        },
+                    }
+                )
             store.write_model(f"attempts/{attempt_number}/retrieval_tester_report.json", tester_report)
             latest_tester = tester_report
             attempt = HarnessAttemptRecord(
@@ -257,17 +314,43 @@ class MultiAgentHarness:
                     next_step="Enable mutation prerequisites or resolve debugger blocker, then rerun harness.",
                 )
 
+            repair_test_evidence: RepairTestEvidence | None = None
+            if scenario is not None:
+                if not worktree_path:
+                    repair_test_evidence = RepairTestEvidence(status="blocked", issues=["debugger did not report a worktree path"])
+                else:
+                    repair_test_evidence = self.repair_test_validator(
+                        self.settings,
+                        Path(worktree_path),
+                        debugger_report.test_files,
+                        debugger_report.test_targets,
+                    )
+                latest_repair_test_evidence = repair_test_evidence
+                attempt.repair_test_evidence = repair_test_evidence
+                store.write_model(f"attempts/{attempt_number}/repair_test_evidence.json", repair_test_evidence)
+
             verifier_input = FinalVerifierInput(
                 objective=objective,
                 tester_report=tester_report,
                 critic_report=critic_report,
                 debugger_report=debugger_report,
+                repair_test_evidence=repair_test_evidence,
             )
             store.write_model(f"attempts/{attempt_number}/final_verifier_input.json", verifier_input)
             verifier_report = await self.final_verifier_runner(verifier_input)
             store.write_model(f"attempts/{attempt_number}/final_verifier_report.json", verifier_report)
             latest_verifier = verifier_report
             attempt.verifier_report = verifier_report
+
+            if repair_test_evidence is not None and repair_test_evidence.status != "pass":
+                attempt.stop_reason_fragment = "repair_test_evidence_failed"
+                attempts.append(attempt)
+                return finish(
+                    status="fail",
+                    stop_reason="repair_test_evidence_failed",
+                    summary="Deterministic repair-test validation rejected the patch.",
+                    next_step="Inspect retained branch and repair_test_evidence artifact.",
+                )
 
             if verifier_report.status == "blocked":
                 attempt.stop_reason_fragment = "verifier_blocked"
@@ -305,8 +388,10 @@ class MultiAgentHarness:
                 summary=verifier_report.tester_refresh_reason or verifier_report.summary,
                 findings=list(verifier_report.review_notes),
             )
-            if worktree_path and self.runtime_rebinder is not None:
-                self.runtime_rebinder(Path(worktree_path))
+            if worktree_path:
+                active_repo_root = Path(worktree_path).resolve()
+                if self.runtime_rebinder is not None:
+                    self.runtime_rebinder(active_repo_root)
 
         return finish(
             status="fail",
@@ -334,6 +419,7 @@ class MultiAgentHarness:
         latest_tester: RetrievalTesterReport | None,
         latest_critic: MaterialsQueryCriticReport | None,
         latest_debugger: CodexDebuggerReport | None,
+        latest_repair_test_evidence: RepairTestEvidence | None,
         latest_verifier: FinalVerifierReport | None,
         branch_name: str | None,
         worktree_path: str | None,
@@ -354,5 +440,6 @@ class MultiAgentHarness:
             latest_tester_report=latest_tester,
             latest_critic_report=latest_critic,
             latest_debugger_report=latest_debugger,
+            latest_repair_test_evidence=latest_repair_test_evidence,
             latest_verifier_report=latest_verifier,
         )

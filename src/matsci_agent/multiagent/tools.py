@@ -192,6 +192,12 @@ def _run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalI
         )
 
 
+def run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalInput) -> LiveEvalEvidence:
+    """Run typed live evaluation from the supplied checkout."""
+
+    return _run_scoped_live_evaluation(settings, payload)
+
+
 def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
     """Create narrow typed tool surfaces for each specialist agent."""
 
@@ -407,10 +413,9 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         sha = _output(_run_completed(["git", "rev-parse", "HEAD"], cwd))
         return json.dumps({"status": "committed", "commit_sha": sha, "output": _output(commit_result)})
 
-    def run_live_retrieval_eval(objective: str, allow_live_mp: bool = False) -> dict[str, object]:
+    def run_live_retrieval_eval(payload: LiveEvalInput) -> dict[str, object]:
         """Run one typed live retrieval evaluation in the active checkout."""
 
-        payload = LiveEvalInput(query=objective, allow_live_mp=allow_live_mp)
         return _run_scoped_live_evaluation(settings, payload).model_dump(mode="json")
 
     shared = [

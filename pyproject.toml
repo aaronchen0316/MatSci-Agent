@@ -28,6 +28,7 @@ matsci-multiagent = "matsci_agent.multiagent.cli:app"
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
+  "pytest-cov>=6.0.0",
   "httpx>=0.28.0",
 ]
 agents = [

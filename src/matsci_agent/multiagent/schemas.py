@@ -26,6 +26,7 @@ HarnessStopReason = Literal[
     "debugger_blocked",
     "verifier_fail",
     "verifier_blocked",
+    "repair_test_evidence_failed",
     "review_cycle_exhausted",
 ]
 
@@ -36,16 +37,18 @@ class RefreshFeedback(BaseModel):
     findings: list[str] = Field(default_factory=list)
 
 
-class RetrievalTesterInput(BaseModel):
-    objective: str
-    refresh_feedback: RefreshFeedback | None = None
-    allow_live_mp: bool = False
-
-
 class LiveEvalInput(BaseModel):
     query: str
     constraints: DiscoveryConstraints | None = None
     allow_live_mp: bool = False
+
+
+class RetrievalTesterInput(BaseModel):
+    objective: str
+    refresh_feedback: RefreshFeedback | None = None
+    allow_live_mp: bool = False
+    live_evaluation_input: LiveEvalInput | None = None
+    scenario_name: str | None = None
 
 
 class ConstraintViolationRecord(BaseModel):
@@ -211,8 +214,25 @@ class CodexDebuggerReport(BaseModel):
     worktree_path: str | None = None
     files_touched: list[str] = Field(default_factory=list)
     commit_sha: str | None = None
+    test_files: list[str] = Field(default_factory=list)
+    test_targets: list[str] = Field(default_factory=list)
     change_summary: str
     follow_up_for_verifier: list[str] = Field(default_factory=list)
+
+
+class RepairTestEvidence(BaseModel):
+    status: Literal["pass", "fail", "blocked"]
+    changed_source_files: list[str] = Field(default_factory=list)
+    changed_test_files: list[str] = Field(default_factory=list)
+    deleted_or_renamed_test_files: list[str] = Field(default_factory=list)
+    declared_test_files: list[str] = Field(default_factory=list)
+    declared_test_targets: list[str] = Field(default_factory=list)
+    targeted_test_output: str = ""
+    full_test_output: str = ""
+    coverage_before: dict[str, float] = Field(default_factory=dict)
+    coverage_after: dict[str, float] = Field(default_factory=dict)
+    coverage_regressions: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
 
 
 class FinalVerifierInput(BaseModel):
@@ -220,6 +240,7 @@ class FinalVerifierInput(BaseModel):
     tester_report: RetrievalTesterReport
     critic_report: MaterialsQueryCriticReport
     debugger_report: CodexDebuggerReport
+    repair_test_evidence: RepairTestEvidence | None = None
 
 
 class FinalVerifierReport(BaseModel):
@@ -246,6 +267,7 @@ class HarnessAttemptRecord(BaseModel):
     tester_report: RetrievalTesterReport
     critic_report: MaterialsQueryCriticReport | None = None
     debugger_report: CodexDebuggerReport | None = None
+    repair_test_evidence: RepairTestEvidence | None = None
     verifier_report: FinalVerifierReport | None = None
     stop_reason_fragment: str | None = None
 
@@ -264,6 +286,7 @@ class HarnessRunReport(BaseModel):
     latest_tester_report: RetrievalTesterReport | None = None
     latest_critic_report: MaterialsQueryCriticReport | None = None
     latest_debugger_report: CodexDebuggerReport | None = None
+    latest_repair_test_evidence: RepairTestEvidence | None = None
     latest_verifier_report: FinalVerifierReport | None = None
 
 
@@ -285,3 +308,15 @@ class LiveEvalSuiteReport(BaseModel):
     status: Literal["pass", "fail", "blocked"]
     artifact_dir: str | None = None
     scenarios: list[LiveEvalScenarioResult] = Field(default_factory=list)
+
+
+class PullRequestPublication(BaseModel):
+    status: Literal["published", "blocked", "failed"]
+    branch_name: str
+    base_branch: str
+    validation_only: bool = False
+    summary: str
+    artifact_dir: str | None = None
+    local_ci_output: str = ""
+    pull_request_number: int | None = None
+    pull_request_url: str | None = None

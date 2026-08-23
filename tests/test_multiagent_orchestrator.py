@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from matsci_agent.multiagent.orchestrator import MultiAgentHarness
+from matsci_agent.multiagent.live_suite import get_live_scenario
 from matsci_agent.multiagent.schemas import (
     CandidateReviewSnapshot,
     CandidateReviewSnapshots,
@@ -20,6 +21,8 @@ from matsci_agent.multiagent.schemas import (
     RefreshFeedback,
     RetrievalTesterInput,
     RetrievalTesterReport,
+    RepairTestEvidence,
+    StageCounts,
 )
 from matsci_agent.multiagent.settings import MultiAgentSettings
 
@@ -346,6 +349,80 @@ def test_verifier_refresh_rebinds_agents_to_repair_worktree(tmp_path: Path):
 
     assert report.stop_reason == "dual_review_pass"
     assert rebound_roots == [repair_worktree]
+
+
+def test_live_scenario_repair_uses_exact_constraints_and_retests_repaired_worktree(tmp_path: Path):
+    repair_worktree = tmp_path / "worktrees" / "retrieval-fix-1"
+    repair_worktree.mkdir(parents=True)
+    scenario = get_live_scenario("volume")
+    evaluator_settings: list[Path] = []
+    tester_calls: list[RetrievalTesterInput] = []
+    evidence = [
+        LiveEvalEvidence(status="fail", query=scenario.query, failed_stage="mp_zero_results"),
+        _live_evidence().model_copy(
+            update={
+                "query": scenario.query,
+                "result_counts": StageCounts(raw_count=1, filtered_count=1, ranked_count=1),
+            }
+        ),
+    ]
+    harness = _make_harness(
+        tmp_path,
+        tester_results=[
+            _tester_report("fail", "volume failed", "mp_zero_results"),
+            _tester_report("pass", "volume fixed"),
+        ],
+        critic_results=[_critic_report("agree"), _critic_report("agree")],
+        debugger_results=[_debugger_report(worktree_path=str(repair_worktree))],
+        verifier_results=[_verifier_report("accepted", "patch accepted")],
+        tester_calls=tester_calls,
+    )
+
+    def evaluate(settings, _payload):
+        evaluator_settings.append(settings.repo_root)
+        return evidence.pop(0)
+
+    harness.scenario_evaluator = evaluate
+    harness.repair_test_validator = lambda *_args: RepairTestEvidence(status="pass")
+
+    report = asyncio.run(harness.run(scenario.query, scenario=scenario))
+
+    assert report.status == "pass"
+    assert tester_calls[0].scenario_name == "volume"
+    assert tester_calls[0].live_evaluation_input is not None
+    assert tester_calls[0].live_evaluation_input.constraints == scenario.constraints
+    assert evaluator_settings == [tmp_path, repair_worktree]
+    assert report.latest_repair_test_evidence is not None
+    assert report.latest_repair_test_evidence.status == "pass"
+
+
+def test_live_scenario_repair_blocks_after_failed_deterministic_test_evidence(tmp_path: Path):
+    repair_worktree = tmp_path / "worktrees" / "retrieval-fix-1"
+    repair_worktree.mkdir(parents=True)
+    scenario = get_live_scenario("formation_energy")
+    verifier_calls: list[FinalVerifierInput] = []
+    harness = _make_harness(
+        tmp_path,
+        tester_results=[_tester_report("fail", "filter failure", "llm_policy_filter")],
+        critic_results=[_critic_report("agree")],
+        debugger_results=[_debugger_report(worktree_path=str(repair_worktree))],
+        verifier_results=[_verifier_report("accepted", "incorrectly accepted")],
+        verifier_calls=verifier_calls,
+    )
+    harness.scenario_evaluator = lambda _settings, _payload: LiveEvalEvidence(
+        status="fail", query=scenario.query, failed_stage="llm_policy_filter"
+    )
+    harness.repair_test_validator = lambda *_args: RepairTestEvidence(
+        status="fail",
+        changed_source_files=["src/matsci_agent/tools/policy_filter.py"],
+        issues=["changed production-file coverage decreased"],
+    )
+
+    report = asyncio.run(harness.run(scenario.query, scenario=scenario))
+
+    assert report.stop_reason == "repair_test_evidence_failed"
+    assert verifier_calls[0].repair_test_evidence is not None
+    assert verifier_calls[0].repair_test_evidence.status == "fail"
 
 
 def test_accepted_patch_on_third_cycle_exhausts_validation_budget(tmp_path: Path):
