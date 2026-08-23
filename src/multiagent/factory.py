@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from matsci_agent.multiagent.prompt_loader import load_agent_prompt
-from matsci_agent.multiagent.schemas import (
+from multiagent.prompt_loader import load_agent_prompt
+from multiagent.schemas import (
     CodexDebuggerReport,
     FinalVerifierReport,
     MaterialsQueryCriticReport,
     RetrievalTesterReport,
 )
-from matsci_agent.multiagent.settings import MultiAgentSettings
-from matsci_agent.multiagent.tools import ToolGroups
+from multiagent.settings import MultiAgentSettings
+from multiagent.tools import ToolGroups
 
 
 @dataclass(frozen=True)
@@ -36,28 +36,28 @@ def build_agent_registry(sdk, settings: MultiAgentSettings, tool_groups: ToolGro
 
     retrieval_tester = sdk.Agent(
         name="Retrieval Tester Agent",
-        instructions=load_agent_prompt("retrieval_tester"),
+        instructions=load_agent_prompt("retrieval_tester", settings),
         model=settings.model,
         tools=tool_groups.tester,
         output_type=_non_strict_output_schema(sdk, RetrievalTesterReport),
     )
     materials_query_critic = sdk.Agent(
         name="Materials Query Critic Agent",
-        instructions=load_agent_prompt("materials_query_critic"),
+        instructions=load_agent_prompt("materials_query_critic", settings),
         model=settings.model,
         tools=tool_groups.critic,
         output_type=_non_strict_output_schema(sdk, MaterialsQueryCriticReport),
     )
     codex_debugger = sdk.Agent(
         name="Codex Debugger Agent",
-        instructions=load_agent_prompt("codex_debugger"),
+        instructions=load_agent_prompt("codex_debugger", settings),
         model=settings.model,
         tools=tool_groups.debugger,
         output_type=_non_strict_output_schema(sdk, CodexDebuggerReport),
     )
     final_verifier = sdk.Agent(
         name="Final Verifier Agent",
-        instructions=load_agent_prompt("final_verifier"),
+        instructions=load_agent_prompt("final_verifier", settings),
         model=settings.model,
         tools=tool_groups.verifier,
         output_type=_non_strict_output_schema(sdk, FinalVerifierReport),

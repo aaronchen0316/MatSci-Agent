@@ -311,12 +311,14 @@ class LiveEvalSuiteReport(BaseModel):
 
 
 class PullRequestPublication(BaseModel):
-    status: Literal["published", "blocked", "failed"]
+    status: Literal["merged", "published", "blocked", "failed"]
     branch_name: str
     base_branch: str
-    validation_only: bool = False
     summary: str
     artifact_dir: str | None = None
     local_ci_output: str = ""
     pull_request_number: int | None = None
     pull_request_url: str | None = None
+    head_sha: str | None = None
+    merge_sha: str | None = None
+    ci_status: Literal["pass", "fail", "timeout"] | None = None

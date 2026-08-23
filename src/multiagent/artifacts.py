@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.settings import MultiAgentSettings
 
 
 class HarnessArtifactStore:
@@ -31,7 +31,9 @@ class HarnessArtifactStore:
                 "disable_tracing": settings.disable_tracing,
                 "enable_live_mp": settings.enable_live_mp,
                 "enable_git_write": settings.enable_git_write,
-                "base_branch": settings.base_branch,
+                "tool_root": str(settings.resolved_tool_root),
+                "target_repo": str(settings.resolved_target_repo),
+                "target_base_branch": settings.target_base_branch,
             },
         )
         return store

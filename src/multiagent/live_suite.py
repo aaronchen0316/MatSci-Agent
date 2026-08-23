@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from matsci_agent.multiagent.artifacts import HarnessArtifactStore
-from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
-from matsci_agent.multiagent.schemas import (
+from multiagent.artifacts import HarnessArtifactStore
+from multiagent.schemas import (
     LiveEvalInput,
     LiveEvalScenario,
     LiveEvalScenarioResult,
     LiveEvalSuiteReport,
 )
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.settings import MultiAgentSettings
+from multiagent.tools import run_scoped_live_evaluation
 from matsci_agent.schemas import DiscoveryConstraints, FloatRange, MPFilters
 
 
@@ -92,20 +92,18 @@ def scenario_assertion_failures(scenario: LiveEvalScenario, evidence) -> list[st
 def run_live_suite(
     settings: MultiAgentSettings,
     *,
-    evaluator: LiveRetrievalEvaluator | None = None,
+    evaluator=None,
 ) -> LiveEvalSuiteReport:
     store = HarnessArtifactStore.create(settings, "multiagent_live_eval_suite")
-    active_evaluator = evaluator or LiveRetrievalEvaluator()
     results: list[LiveEvalScenarioResult] = []
 
     for scenario in LIVE_EVAL_SCENARIOS:
-        evidence = active_evaluator.evaluate(
-            LiveEvalInput(
-                query=scenario.query,
-                constraints=scenario.constraints,
-                allow_live_mp=settings.enable_live_mp,
-            )
+        payload = LiveEvalInput(
+            query=scenario.query,
+            constraints=scenario.constraints,
+            allow_live_mp=settings.enable_live_mp,
         )
+        evidence = evaluator.evaluate(payload) if evaluator is not None else run_scoped_live_evaluation(settings, payload)
         result = LiveEvalScenarioResult(
             scenario=scenario,
             evidence=evidence,

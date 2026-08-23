@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import sys
 
-from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
-from matsci_agent.multiagent.schemas import LiveEvalEvidence, LiveEvalInput
+from multiagent.evaluator import LiveRetrievalEvaluator
+from multiagent.schemas import LiveEvalEvidence, LiveEvalInput
 
 
 def main() -> int:

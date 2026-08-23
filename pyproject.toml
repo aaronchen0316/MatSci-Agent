@@ -23,7 +23,7 @@ dependencies = [
 
 [project.scripts]
 matsci = "matsci_agent.cli.main:app"
-matsci-multiagent = "matsci_agent.multiagent.cli:app"
+matsci-multiagent = "multiagent.cli:app"
 
 [project.optional-dependencies]
 dev = [

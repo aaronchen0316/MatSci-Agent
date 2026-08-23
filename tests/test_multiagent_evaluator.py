@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
-from matsci_agent.multiagent.schemas import LiveEvalInput, RetrievalTesterReport
+from multiagent.evaluator import LiveRetrievalEvaluator
+from multiagent.schemas import LiveEvalInput, RetrievalTesterReport
 from matsci_agent.schemas import (
     Candidate,
     DiscoveryConstraints,

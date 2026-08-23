@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from matsci_agent.multiagent.orchestrator import MultiAgentHarness
-from matsci_agent.multiagent.live_suite import get_live_scenario
-from matsci_agent.multiagent.schemas import (
+from multiagent.orchestrator import MultiAgentHarness
+from multiagent.live_suite import get_live_scenario
+from multiagent.schemas import (
     CandidateReviewSnapshot,
     CandidateReviewSnapshots,
     CodexDebuggerInput,
@@ -24,12 +24,12 @@ from matsci_agent.multiagent.schemas import (
     RepairTestEvidence,
     StageCounts,
 )
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.settings import MultiAgentSettings
 
 
 def _settings(tmp_path: Path) -> MultiAgentSettings:
     return MultiAgentSettings(
-        repo_root=tmp_path,
+        tool_root=tmp_path, target_repo=tmp_path,
         enable_live_mp=True,
         enable_git_write=True,
         worktree_root=tmp_path / "worktrees",
@@ -261,7 +261,7 @@ def test_repair_loop_uses_configured_branch_prefix(tmp_path: Path):
         debugger_calls=debugger_calls,
     )
     harness.settings = MultiAgentSettings(
-        repo_root=harness.settings.repo_root,
+        tool_root=harness.settings.resolved_target_root, target_repo=harness.settings.resolved_target_root,
         enable_live_mp=True,
         enable_git_write=True,
         worktree_root=harness.settings.worktree_root,
@@ -379,7 +379,7 @@ def test_live_scenario_repair_uses_exact_constraints_and_retests_repaired_worktr
     )
 
     def evaluate(settings, _payload):
-        evaluator_settings.append(settings.repo_root)
+        evaluator_settings.append(settings.resolved_target_root)
         return evidence.pop(0)
 
     harness.scenario_evaluator = evaluate

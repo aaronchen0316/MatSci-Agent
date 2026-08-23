@@ -4,16 +4,16 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import matsci_agent.multiagent.cli as multiagent_cli
-from matsci_agent.multiagent.schemas import HarnessRunReport, LiveEvalSuiteReport, PullRequestPublication
-from matsci_agent.multiagent.settings import MultiAgentSettings
+import multiagent.cli as multiagent_cli
+from multiagent.schemas import HarnessRunReport, LiveEvalSuiteReport, PullRequestPublication
+from multiagent.settings import MultiAgentSettings
 
 
 runner = CliRunner()
 
 
 def _settings(tmp_path: Path) -> MultiAgentSettings:
-    return MultiAgentSettings(repo_root=tmp_path, artifact_root=tmp_path / "artifacts" / "multiagent-runs")
+    return MultiAgentSettings(tool_root=tmp_path, target_repo=tmp_path, artifact_root=tmp_path / "artifacts" / "multiagent-runs")
 
 
 def test_plan_command_renders_safe_runtime_config(monkeypatch, tmp_path: Path):
@@ -30,6 +30,7 @@ def test_plan_command_renders_safe_runtime_config(monkeypatch, tmp_path: Path):
 
 def test_eval_live_command_prints_suite_report(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: _settings(tmp_path)))
+    monkeypatch.setattr(multiagent_cli, "_run_from_target_base", lambda settings, action: action(settings))
     monkeypatch.setattr(
         multiagent_cli,
         "run_live_suite",
@@ -44,6 +45,7 @@ def test_eval_live_command_prints_suite_report(monkeypatch, tmp_path: Path):
 
 def test_eval_live_command_fails_when_live_evidence_is_blocked(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: _settings(tmp_path)))
+    monkeypatch.setattr(multiagent_cli, "_run_from_target_base", lambda settings, action: action(settings))
     monkeypatch.setattr(
         multiagent_cli,
         "run_live_suite",
@@ -57,6 +59,7 @@ def test_eval_live_command_fails_when_live_evidence_is_blocked(monkeypatch, tmp_
 
 def test_run_command_prints_dual_review_result(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: _settings(tmp_path)))
+    monkeypatch.setattr(multiagent_cli, "_run_from_target_base", lambda settings, action: action(settings))
 
     class FakeHarness:
         async def run(self, objective: str) -> HarnessRunReport:
@@ -87,14 +90,15 @@ def test_repair_live_requires_live_and_git_mutation_flags(monkeypatch, tmp_path:
 
 def test_repair_live_resolves_named_scenario(monkeypatch, tmp_path: Path):
     settings = MultiAgentSettings(
-        repo_root=tmp_path,
+        tool_root=tmp_path, target_repo=tmp_path,
         artifact_root=tmp_path / "artifacts",
         enable_live_mp=True,
         enable_git_write=True,
-        base_branch="multi-agent",
+        target_base_branch="multi-agent",
     )
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(multiagent_cli, "_repair_prerequisite_error", lambda _settings: None)
+    monkeypatch.setattr(multiagent_cli, "_run_from_target_base", lambda scoped, action: action(scoped))
     observed = {}
 
     class FakeHarness:
@@ -118,28 +122,40 @@ def test_repair_live_resolves_named_scenario(monkeypatch, tmp_path: Path):
     assert observed["objective"] == observed["scenario"].query
 
 
-def test_publish_pr_forwards_validation_only_contract(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: _settings(tmp_path)))
+def test_repair_live_auto_publishes_only_successful_repair(monkeypatch, tmp_path: Path):
+    settings = MultiAgentSettings(tool_root=tmp_path, target_repo=tmp_path, enable_live_mp=True, enable_git_write=True)
+    monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(multiagent_cli, "_repair_prerequisite_error", lambda _settings: None)
+    monkeypatch.setattr(multiagent_cli, "_run_from_target_base", lambda scoped, action: action(scoped))
     observed = {}
+
+    class FakeHarness:
+        async def run(self, objective: str, *, scenario) -> HarnessRunReport:
+            return HarnessRunReport(
+                status="pass",
+                summary=objective,
+                next_step="merged automatically",
+                stop_reason="dual_review_pass",
+                attempt_count=2,
+                branch_name="fix/volume",
+                artifact_dir=str(tmp_path / "artifacts"),
+            )
 
     def fake_publish(settings, **kwargs):
         observed["settings"] = settings
         observed.update(kwargs)
         return PullRequestPublication(
-            status="published",
+            status="merged",
             branch_name=kwargs["branch_name"],
-            base_branch=kwargs["base_branch"],
-            validation_only=True,
-            summary="draft created",
+            base_branch="main",
+            summary="merged",
         )
 
-    monkeypatch.setattr(multiagent_cli, "publish_pull_request", fake_publish)
+    monkeypatch.setattr(multiagent_cli.MultiAgentHarness, "build", classmethod(lambda cls, _settings: FakeHarness()))
+    monkeypatch.setattr(multiagent_cli, "publish_and_merge_repair", fake_publish)
 
-    result = runner.invoke(
-        multiagent_cli.app,
-        ["publish-pr", "retrieval-fix-retry", "--validation-only", "--reason", "synthetic fixture branch"],
-    )
+    result = runner.invoke(multiagent_cli.app, ["repair-live", "--scenario", "volume"])
 
     assert result.exit_code == 0
-    assert observed["validation_only"] is True
-    assert observed["reason"] == "synthetic fixture branch"
+    assert observed["branch_name"] == "fix/volume"
+    assert observed["artifact_dir"] == tmp_path / "artifacts"

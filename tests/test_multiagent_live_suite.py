@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from matsci_agent.multiagent.live_suite import LIVE_EVAL_SCENARIOS, run_live_suite
-from matsci_agent.multiagent.schemas import LiveEvalEvidence, StageCounts
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.live_suite import LIVE_EVAL_SCENARIOS, run_live_suite
+from multiagent.schemas import LiveEvalEvidence, StageCounts
+from multiagent.settings import MultiAgentSettings
 
 
 class PassingEvaluator:
@@ -27,7 +27,7 @@ class BlockedEvaluator:
 
 def _settings(tmp_path) -> MultiAgentSettings:
     return MultiAgentSettings(
-        repo_root=tmp_path,
+        tool_root=tmp_path, target_repo=tmp_path,
         enable_live_mp=True,
         artifact_root=tmp_path / "artifacts" / "multiagent-runs",
     )

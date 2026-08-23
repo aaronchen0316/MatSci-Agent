@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 from uuid import uuid4
 
-from matsci_agent.multiagent.schemas import RepairTestEvidence
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.schemas import RepairTestEvidence
+from multiagent.settings import MultiAgentSettings
 
 
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -103,7 +103,7 @@ def _baseline_coverage(
     root = settings.worktree_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     baseline = root / f".coverage-base-{uuid4().hex[:12]}"
-    add = _run(["git", "worktree", "add", "--detach", str(baseline), base_branch], settings.repo_root)
+    add = _run(["git", "worktree", "add", "--detach", str(baseline), base_branch], settings.resolved_target_repo)
     if add.returncode != 0:
         return {}, "", f"unable to create baseline worktree: {_output(add)}"
     try:
@@ -112,7 +112,7 @@ def _baseline_coverage(
             return {}, output, "baseline coverage command failed"
         return coverage, output, None
     finally:
-        _run(["git", "worktree", "remove", "--force", str(baseline)], settings.repo_root)
+        _run(["git", "worktree", "remove", "--force", str(baseline)], settings.resolved_target_repo)
 
 
 def validate_repair_test_evidence(
@@ -127,7 +127,7 @@ def validate_repair_test_evidence(
     repo_root = worktree_path.resolve()
     issues: list[str] = []
     try:
-        changed_sources, changed_tests, removed_tests = _changed_paths(repo_root, settings.base_branch)
+        changed_sources, changed_tests, removed_tests = _changed_paths(repo_root, settings.target_base_branch)
     except ValueError as exc:
         return RepairTestEvidence(status="blocked", issues=[str(exc)])
 
@@ -172,7 +172,7 @@ def validate_repair_test_evidence(
         if not issues:
             coverage_before, baseline_output, baseline_error = _baseline_coverage(
                 settings,
-                settings.base_branch,
+                settings.target_base_branch,
                 temporary / "baseline.json",
                 temporary / "baseline-env",
             )

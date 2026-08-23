@@ -3,94 +3,106 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import matsci_agent.multiagent.publisher as publisher
-from matsci_agent.multiagent.publisher import publish_pull_request
-from matsci_agent.multiagent.settings import MultiAgentSettings
+import multiagent.publisher as publisher
+from multiagent.publisher import publish_and_merge_repair
+from multiagent.settings import MultiAgentSettings
 
 
 def _settings(tmp_path: Path) -> MultiAgentSettings:
-    return MultiAgentSettings(repo_root=tmp_path, base_branch="multi-agent", worktree_root=tmp_path / "worktrees")
+    return MultiAgentSettings(tool_root=tmp_path, target_repo=tmp_path, worktree_root=tmp_path / "worktrees")
 
 
 def test_publisher_requires_github_token(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-    result = publish_pull_request(_settings(tmp_path), branch_name="retrieval-fix-1", base_branch="multi-agent")
+    result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
 
     assert result.status == "blocked"
     assert result.summary == "missing GITHUB_TOKEN"
 
 
-def test_validation_only_publication_requires_reason(monkeypatch, tmp_path: Path):
+def test_publisher_rejects_non_fix_branch_before_push(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
-    monkeypatch.setattr(publisher, "_ensure_clean_base", lambda *_args: None)
-    monkeypatch.setattr(publisher, "_run", lambda args, _cwd: subprocess.CompletedProcess(args, 0, "", ""))
 
-    result = publish_pull_request(
-        _settings(tmp_path),
-        branch_name="retrieval-fix-retry",
-        base_branch="multi-agent",
-        validation_only=True,
-    )
+    result = publish_and_merge_repair(_settings(tmp_path), branch_name="retrieval-fix-retry", artifact_dir=tmp_path)
 
     assert result.status == "blocked"
-    assert "requires a non-empty reason" in result.summary
+    assert "fix/<issue>" in result.summary
 
 
-def test_validation_only_publication_pushes_draft_without_production_artifact(monkeypatch, tmp_path: Path):
+def test_publisher_rejects_non_product_diff_before_push(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
-    monkeypatch.setattr(publisher, "_ensure_clean_base", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: "repair diff includes non-product paths: src/multiagent/tools.py")
+    commands: list[list[str]] = []
+
+    def fake_run(args, _cwd):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(publisher, "_run", fake_run)
+
+    result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
+
+    assert result.status == "blocked"
+    assert "non-product" in result.summary
+    assert not any(command[:2] == ["git", "push"] for command in commands)
+
+
+def test_publisher_pushes_ready_pr_waits_ci_and_squash_merges(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("GITHUB_TOKEN", "secret")
+    monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_run_branch_suite", lambda *_args: (True, "173 passed"))
+    monkeypatch.setattr(publisher, "_github_repository", lambda *_args: "example/repo")
+    monkeypatch.setattr(publisher, "_create_ready_pr", lambda **_kwargs: (42, "https://example.test/pr/42", "head-sha"))
+    monkeypatch.setattr(publisher, "_wait_for_checks", lambda **_kwargs: "pass")
     observed: dict[str, object] = {}
+    def merge(**kwargs):
+        observed["merge"] = kwargs
+        return "merge-sha"
+
+    monkeypatch.setattr(publisher, "_squash_merge", merge)
 
     def fake_run(args, _cwd):
         observed.setdefault("commands", []).append(args)
         return subprocess.CompletedProcess(args, 0, "", "")
 
-    def fake_create(**kwargs):
-        observed["request"] = kwargs
-        return 42, "https://github.com/example/repo/pull/42"
-
     monkeypatch.setattr(publisher, "_run", fake_run)
-    monkeypatch.setattr(publisher, "_github_repository", lambda _root: "example/repo")
-    monkeypatch.setattr(publisher, "_create_draft_pr", fake_create)
 
-    result = publish_pull_request(
-        _settings(tmp_path),
-        branch_name="retrieval-fix-retry",
-        base_branch="multi-agent",
-        validation_only=True,
-        reason="synthetic defect fixture branch",
-    )
+    result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
 
-    assert result.status == "published"
-    assert result.validation_only is True
-    assert result.pull_request_number == 42
-    assert observed["request"]["title"].startswith("[VALIDATION ONLY]")
-    assert "must not be merged" in observed["request"]["body"]
+    assert result.status == "merged"
+    assert result.head_sha == "head-sha"
+    assert result.merge_sha == "merge-sha"
+    assert observed["merge"]["sha"] == "head-sha"
+    assert any(command[:2] == ["git", "push"] for command in observed["commands"])
     assert "secret" not in result.model_dump_json()
 
 
-def test_production_publication_rejects_nonancestor_branch_before_push(monkeypatch, tmp_path: Path):
+def test_publisher_retains_ready_pr_when_remote_ci_fails(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
-    monkeypatch.setattr(publisher, "_ensure_clean_base", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
     monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args: None)
-    commands: list[list[str]] = []
+    monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_run_branch_suite", lambda *_args: (True, "173 passed"))
+    monkeypatch.setattr(publisher, "_github_repository", lambda *_args: "example/repo")
+    monkeypatch.setattr(publisher, "_create_ready_pr", lambda **_kwargs: (42, "https://example.test/pr/42", "head-sha"))
+    monkeypatch.setattr(publisher, "_wait_for_checks", lambda **_kwargs: "fail")
+    monkeypatch.setattr(publisher, "_run", lambda args, _cwd: subprocess.CompletedProcess(args, 0, "", ""))
+    merge_called = False
 
-    def fake_run(args, _cwd):
-        commands.append(args)
-        if args[:3] == ["git", "merge-base", "--is-ancestor"]:
-            return subprocess.CompletedProcess(args, 1, "", "")
-        return subprocess.CompletedProcess(args, 0, "", "")
+    def merge(**_kwargs):
+        nonlocal merge_called
+        merge_called = True
+        return "merge-sha"
 
-    monkeypatch.setattr(publisher, "_run", fake_run)
+    monkeypatch.setattr(publisher, "_squash_merge", merge)
 
-    result = publish_pull_request(
-        _settings(tmp_path),
-        branch_name="retrieval-fix-retry",
-        base_branch="multi-agent",
-        artifact_dir=tmp_path,
-    )
+    result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
 
-    assert result.status == "blocked"
-    assert result.summary == "repair branch is not descended from base branch"
-    assert not any(command[:2] == ["git", "push"] for command in commands)
+    assert result.status == "published"
+    assert result.ci_status == "fail"
+    assert not merge_called

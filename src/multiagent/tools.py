@@ -7,17 +7,17 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
-from matsci_agent.multiagent.schemas import LiveEvalEvidence, LiveEvalInput
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.schemas import LiveEvalEvidence, LiveEvalInput
+from multiagent.settings import MultiAgentSettings
 
-_BRANCH_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_BRANCH_SEGMENT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _RESERVED_BRANCH_NAMES = {"head", "fetch_head", "orig_head"}
 _SCOPED_EVAL_TIMEOUT_SECONDS = 180
 _MUTABLE_PATH_PREFIXES = (
     "src/matsci_agent/",
     "tests/",
-    "agent_specs/",
 )
 _MUTABLE_SUFFIXES = {
     ".py",
@@ -47,13 +47,19 @@ def _output(result: subprocess.CompletedProcess[str]) -> str:
     return ((result.stdout or "") + (result.stderr or "")).strip()
 
 
-def _validate_branch_name(branch_name: str) -> str:
-    if not _BRANCH_NAME_PATTERN.fullmatch(branch_name):
-        raise ValueError("branch_name must be a safe single path segment")
-    if branch_name in {".", ".."} or ".." in branch_name:
-        raise ValueError("branch_name must not contain traversal segments")
-    if branch_name in _RESERVED_BRANCH_NAMES or branch_name.endswith((".", ".lock")):
-        raise ValueError("branch_name is reserved or invalid")
+def _validate_branch_name(branch_name: str, *, require_fix_namespace: bool = False) -> str:
+    parts = branch_name.split("/")
+    if not parts or any(
+        not _BRANCH_SEGMENT_PATTERN.fullmatch(part)
+        or part in {".", ".."}
+        or ".." in part
+        or part in _RESERVED_BRANCH_NAMES
+        or part.endswith((".", ".lock"))
+        for part in parts
+    ):
+        raise ValueError("branch_name must contain safe Git path segments")
+    if require_fix_namespace and (len(parts) != 2 or parts[0] != "fix"):
+        raise ValueError("repair branch_name must use fix/<issue>")
     return branch_name
 
 
@@ -84,7 +90,7 @@ def _is_under(root: Path, path: Path) -> bool:
 
 
 def _registered_worktree_paths(settings: MultiAgentSettings) -> set[Path]:
-    result = _run_completed(["git", "worktree", "list", "--porcelain"], settings.repo_root)
+    result = _run_completed(["git", "worktree", "list", "--porcelain"], settings.resolved_target_repo)
     if result.returncode != 0:
         raise ValueError("unable to list registered git worktrees")
     return {
@@ -155,21 +161,40 @@ def cleanup_worktree(settings: MultiAgentSettings, worktree_path: str) -> dict[s
     dirty = _output(_run_completed(["git", "status", "--porcelain"], cwd))
     if dirty:
         return {"status": "blocked", "reason": "worktree has uncommitted changes"}
-    result = _run_completed(["git", "worktree", "remove", str(cwd)], settings.repo_root)
+    result = _run_completed(["git", "worktree", "remove", str(cwd)], settings.resolved_target_repo)
     if result.returncode != 0:
         return {"status": "failed", "reason": "git worktree remove failed", "output": _output(result)}
     return {"status": "removed", "worktree_path": str(cwd)}
 
 
+def create_target_base_worktree(settings: MultiAgentSettings) -> dict[str, str]:
+    """Create a clean detached product checkout from the configured base."""
+
+    root = settings.worktree_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f".base-{uuid4().hex[:12]}"
+    result = _run_completed(
+        ["git", "worktree", "add", "--detach", str(path), settings.target_base_branch],
+        settings.resolved_target_repo,
+    )
+    if result.returncode != 0:
+        return {"status": "failed", "reason": _output(result)}
+    return {"status": "created", "worktree_path": str(path.resolve())}
+
+
 def _run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalInput) -> LiveEvalEvidence:
     env = os.environ.copy()
-    source_root = str((settings.repo_root / "src").resolve())
+    target_source_root = str((settings.resolved_target_root / "src").resolve())
+    tool_source_root = str((settings.resolved_tool_root / "src").resolve())
     inherited_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = source_root if not inherited_pythonpath else os.pathsep.join((source_root, inherited_pythonpath))
+    source_paths = [target_source_root, tool_source_root]
+    if inherited_pythonpath:
+        source_paths.append(inherited_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(source_paths)
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "matsci_agent.multiagent.scoped_evaluator"],
-            cwd=str(settings.repo_root),
+            [sys.executable, "-m", "multiagent.scoped_evaluator"],
+            cwd=str(settings.resolved_target_root),
             input=payload.model_dump_json(),
             capture_output=True,
             text=True,
@@ -204,8 +229,8 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
     def read_context_snapshot() -> str:
         """Return compact project context needed by retrieval-repair agents."""
 
-        context_path = settings.repo_root / "CONTEXT.md"
-        readme_path = settings.repo_root / "README.md"
+        context_path = settings.resolved_target_root / "CONTEXT.md"
+        readme_path = settings.resolved_target_root / "README.md"
         return "".join(
             [
                 "# CONTEXT.md\n",
@@ -218,7 +243,7 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
     def read_repo_file(relative_path: str, start_line: int = 1, end_line: int = 240) -> str:
         """Read one text file slice under the repository root."""
 
-        path = _resolve_under(settings.repo_root, relative_path, require_exists=True)
+        path = _resolve_under(settings.resolved_target_root, relative_path, require_exists=True)
         if not path.is_file():
             raise ValueError(f"not a file: {relative_path}")
         return _numbered_slice(path, start_line=start_line, end_line=end_line)
@@ -226,44 +251,44 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
     def list_repo_files(relative_dir: str = "src") -> list[str]:
         """List files beneath one repository directory without shell expansion."""
 
-        root = _resolve_under(settings.repo_root, relative_dir, require_exists=True)
+        root = _resolve_under(settings.resolved_target_root, relative_dir, require_exists=True)
         if not root.is_dir():
             raise ValueError(f"not a directory: {relative_dir}")
-        return sorted(str(path.relative_to(settings.repo_root)) for path in root.rglob("*") if path.is_file())
+        return sorted(str(path.relative_to(settings.resolved_target_root)) for path in root.rglob("*") if path.is_file())
 
     def read_git_status() -> str:
         """Read repository Git status."""
 
-        return _output(_run_completed(["git", "status", "--short"], settings.repo_root))
+        return _output(_run_completed(["git", "status", "--short"], settings.resolved_target_root))
 
     def read_git_diff() -> str:
         """Read repository Git diff without mutation."""
 
-        return _output(_run_completed(["git", "diff", "--"], settings.repo_root))
+        return _output(_run_completed(["git", "diff", "--"], settings.resolved_target_root))
 
     def read_git_log(limit: int = 10) -> str:
         """Read a bounded recent Git log."""
 
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
-        return _output(_run_completed(["git", "log", f"-{limit}", "--oneline"], settings.repo_root))
+        return _output(_run_completed(["git", "log", f"-{limit}", "--oneline"], settings.resolved_target_root))
 
     def run_pytest_targets(targets: list[str]) -> str:
         """Run bounded pytest file targets under tests/ only."""
 
         if not targets or len(targets) > 10:
             raise ValueError("provide between 1 and 10 test targets")
-        tests_root = (settings.repo_root / "tests").resolve()
+        tests_root = (settings.resolved_target_root / "tests").resolve()
         normalized: list[str] = []
         for target in targets:
             normalized_target = _normalized_relative_path(target)
             if normalized_target is None or not normalized_target.startswith("tests/") or Path(normalized_target).suffix != ".py":
                 raise ValueError(f"test target not allowed: {target}")
-            path = _resolve_under(settings.repo_root, normalized_target, require_exists=True)
+            path = _resolve_under(settings.resolved_target_root, normalized_target, require_exists=True)
             if not path.is_file() or not _is_under(tests_root, path) or path == tests_root:
                 raise ValueError(f"test target is not a file: {target}")
-            normalized.append(str(path.relative_to(settings.repo_root)))
-        return _output(_run_completed(["uv", "run", "pytest", "-q", *normalized], settings.repo_root))
+            normalized.append(str(path.relative_to(settings.resolved_target_root)))
+        return _output(_run_completed(["uv", "run", "pytest", "-q", *normalized], settings.resolved_target_root))
 
     def create_branch_worktree(branch_name: str) -> str:
         """Create a validated isolated worktree for debugger changes."""
@@ -271,7 +296,7 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         if not settings.enable_git_write:
             return json.dumps({"status": "blocked", "reason": "git writes disabled"})
         try:
-            safe_branch = _validate_branch_name(branch_name)
+            safe_branch = _validate_branch_name(branch_name, require_fix_namespace=True)
         except ValueError as exc:
             return json.dumps({"status": "error", "reason": str(exc), "branch_name": branch_name})
 
@@ -287,7 +312,7 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
                     "worktree_path": str(worktree_path),
                 }
             )
-        branch_check = _run_completed(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{safe_branch}"], settings.repo_root)
+        branch_check = _run_completed(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{safe_branch}"], settings.resolved_target_repo)
         if branch_check.returncode == 0:
             return json.dumps(
                 {
@@ -298,8 +323,8 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
                 }
             )
         result = _run_completed(
-            ["git", "worktree", "add", "-b", safe_branch, str(worktree_path), settings.base_branch],
-            settings.repo_root,
+            ["git", "worktree", "add", "-b", safe_branch, str(worktree_path), settings.target_base_branch],
+            settings.resolved_target_repo,
         )
         if result.returncode != 0:
             return json.dumps(

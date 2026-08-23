@@ -4,10 +4,10 @@ import json
 import subprocess
 from pathlib import Path
 
-import matsci_agent.multiagent.tools as harness_tools
-from matsci_agent.multiagent.schemas import LiveEvalEvidence, LiveEvalInput
-from matsci_agent.multiagent.settings import MultiAgentSettings
-from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree
+import multiagent.tools as harness_tools
+from multiagent.schemas import LiveEvalEvidence, LiveEvalInput
+from multiagent.settings import MultiAgentSettings
+from multiagent.tools import build_tool_groups, cleanup_worktree, create_target_base_worktree
 
 
 class FakeSDK:
@@ -46,9 +46,9 @@ def _make_repo(tmp_path: Path) -> Path:
 
 def _settings(repo: Path, tmp_path: Path, enable_git_write: bool = True) -> MultiAgentSettings:
     return MultiAgentSettings(
-        repo_root=repo,
+        tool_root=repo, target_repo=repo,
         enable_git_write=enable_git_write,
-        base_branch="multi-agent",
+        target_base_branch="multi-agent",
         worktree_root=tmp_path / "worktrees",
     )
 
@@ -57,7 +57,7 @@ def test_worktree_edit_diff_and_commit_flow(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
 
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-1"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-1"))
     assert created["status"] == "created"
     worktree_path = created["worktree_path"]
 
@@ -91,10 +91,10 @@ def test_worktree_creation_fails_fast_on_existing_branch_and_path(tmp_path: Path
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
 
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-2"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-2"))
     assert created["status"] == "created"
 
-    blocked = json.loads(tools["create_branch_worktree"]("retrieval-fix-2"))
+    blocked = json.loads(tools["create_branch_worktree"]("fix/retrieval-2"))
     assert blocked["status"] == "blocked"
     assert blocked["reason"] in {"worktree path already exists", "branch already exists"}
 
@@ -102,7 +102,7 @@ def test_worktree_creation_fails_fast_on_existing_branch_and_path(tmp_path: Path
 def test_mutation_tool_rejects_disallowed_path(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-3"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-3"))
 
     result = json.loads(
         tools["apply_worktree_text_edit"](
@@ -119,7 +119,7 @@ def test_mutation_tool_rejects_disallowed_path(tmp_path: Path):
 def test_mutation_tool_rejects_path_traversal(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-4"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-4"))
 
     result = json.loads(
         tools["apply_worktree_text_edit"](
@@ -136,7 +136,7 @@ def test_mutation_tool_rejects_path_traversal(tmp_path: Path):
 def test_mutation_tool_rejects_traversal_hidden_by_allowed_prefix(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-prefix-traversal"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-prefix-traversal"))
 
     result = json.loads(
         tools["apply_worktree_text_edit"](
@@ -154,7 +154,7 @@ def test_mutation_tool_rejects_traversal_hidden_by_allowed_prefix(tmp_path: Path
 def test_mutation_tool_rejects_unsupported_suffix(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-5"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-5"))
 
     result = json.loads(
         tools["apply_worktree_text_edit"](
@@ -171,7 +171,7 @@ def test_mutation_tool_rejects_unsupported_suffix(tmp_path: Path):
 def test_mutation_tool_returns_error_for_missing_anchor_or_old_text(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-6"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-6"))
 
     result = json.loads(
         tools["apply_worktree_text_edit"](
@@ -186,10 +186,10 @@ def test_mutation_tool_returns_error_for_missing_anchor_or_old_text(tmp_path: Pa
     assert result["details"] == "old_text not found"
 
 
-def test_append_edit_works_on_existing_allowlisted_text_file(tmp_path: Path):
+def test_mutation_tool_rejects_tooling_prompt_file(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-7"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-7"))
     worktree_path = created["worktree_path"]
 
     result = json.loads(
@@ -200,16 +200,14 @@ def test_append_edit_works_on_existing_allowlisted_text_file(tmp_path: Path):
             insert_text="\nextra line\n",
         )
     )
-    assert result["status"] == "patched"
-
-    content = (Path(worktree_path) / "agent_specs" / "sample.md").read_text()
-    assert content.endswith("\nextra line\n")
+    assert result["status"] == "error"
+    assert "allowlisted" in result["details"]
 
 
 def test_commit_returns_blocked_when_no_changes_exist(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-8"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-8"))
 
     committed = json.loads(tools["commit_worktree_changes"](created["worktree_path"], "no changes"))
     assert committed["status"] == "blocked"
@@ -280,6 +278,8 @@ def test_branch_name_rejects_traversal_and_absolute_paths(tmp_path: Path):
         result = json.loads(tools["create_branch_worktree"](branch_name))
         assert result["status"] == "error"
 
+    assert json.loads(tools["create_branch_worktree"]("fix/valid-repair"))["status"] == "created"
+
 
 def test_worktree_tools_reject_unregistered_directory_and_symlink_escape(tmp_path: Path):
     repo = _make_repo(tmp_path)
@@ -307,9 +307,17 @@ def test_worktree_tools_reject_unregistered_directory_and_symlink_escape(tmp_pat
         raise AssertionError("symlink escape unexpectedly accepted")
 
 
-def test_scoped_live_evaluator_executes_from_active_repo_root(monkeypatch, tmp_path: Path):
+def test_scoped_live_evaluator_executes_from_active_target_root(monkeypatch, tmp_path: Path):
     repo = _make_repo(tmp_path)
-    settings = _settings(repo, tmp_path)
+    tool_root = tmp_path / "tooling"
+    (tool_root / "src").mkdir(parents=True)
+    settings = MultiAgentSettings(
+        tool_root=tool_root,
+        target_repo=repo,
+        active_target_root=repo,
+        target_base_branch="multi-agent",
+        worktree_root=tmp_path / "worktrees",
+    )
     observed: dict[str, object] = {}
     expected = LiveEvalEvidence(status="blocked", query="find oxides", blocked_reason="fixture")
 
@@ -323,16 +331,42 @@ def test_scoped_live_evaluator_executes_from_active_repo_root(monkeypatch, tmp_p
     result = harness_tools._run_scoped_live_evaluation(settings, LiveEvalInput(query="find oxides", allow_live_mp=True))
 
     assert result == expected
-    assert observed["args"] == [harness_tools.sys.executable, "-m", "matsci_agent.multiagent.scoped_evaluator"]
+    assert observed["args"] == [harness_tools.sys.executable, "-m", "multiagent.scoped_evaluator"]
     assert observed["cwd"] == str(repo)
-    assert str(observed["env"]["PYTHONPATH"]).split(":")[0] == str((repo / "src").resolve())
+    assert str(observed["env"]["PYTHONPATH"]).split(":")[:2] == [
+        str((repo / "src").resolve()),
+        str((tool_root / "src").resolve()),
+    ]
     assert '"allow_live_mp":true' in str(observed["input"])
+
+
+def test_target_base_worktree_comes_from_configured_product_branch(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    _run(["git", "branch", "main"], repo)
+    _run(["git", "checkout", "main"], repo)
+    Path(repo, "src/matsci_agent/module.py").write_text("VALUE = 3\n")
+    _run(["git", "commit", "-am", "main value"], repo)
+    _run(["git", "checkout", "multi-agent"], repo)
+    settings = _settings(repo, tmp_path)
+    settings = MultiAgentSettings(
+        tool_root=settings.tool_root,
+        target_repo=settings.target_repo,
+        target_base_branch="main",
+        worktree_root=settings.worktree_root,
+    )
+
+    created = create_target_base_worktree(settings)
+
+    assert created["status"] == "created"
+    base = Path(created["worktree_path"])
+    assert (base / "src/matsci_agent/module.py").read_text() == "VALUE = 3\n"
+    assert cleanup_worktree(settings, str(base))["status"] == "removed"
 
 
 def test_commit_rejects_unallowlisted_changed_files(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-unsafe"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-unsafe"))
     worktree_path = Path(created["worktree_path"])
     (worktree_path / "README.md").write_text("unexpected change\n")
 
@@ -347,20 +381,20 @@ def test_cleanup_removes_clean_worktree_and_retains_branch(tmp_path: Path):
     repo = _make_repo(tmp_path)
     settings = _settings(repo, tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), settings).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-cleanup"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-cleanup"))
 
     cleanup = cleanup_worktree(settings, created["worktree_path"])
 
     assert cleanup["status"] == "removed"
     assert not Path(created["worktree_path"]).exists()
-    assert _run(["git", "show-ref", "--verify", "refs/heads/retrieval-fix-cleanup"], repo).returncode == 0
+    assert _run(["git", "show-ref", "--verify", "refs/heads/fix/retrieval-cleanup"], repo).returncode == 0
 
 
 def test_cleanup_refuses_dirty_worktree(tmp_path: Path):
     repo = _make_repo(tmp_path)
     settings = _settings(repo, tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), settings).debugger)
-    created = json.loads(tools["create_branch_worktree"]("retrieval-fix-dirty"))
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-dirty"))
     Path(created["worktree_path"], "src/matsci_agent/module.py").write_text("VALUE = 9\n")
 
     cleanup = cleanup_worktree(settings, created["worktree_path"])

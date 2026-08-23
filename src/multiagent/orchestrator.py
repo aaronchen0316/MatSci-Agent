@@ -5,11 +5,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from matsci_agent.multiagent.artifacts import HarnessArtifactStore
-from matsci_agent.multiagent.factory import AgentRegistry, build_agent_registry
-from matsci_agent.multiagent.live_suite import scenario_assertion_failures
-from matsci_agent.multiagent.repair_validation import validate_repair_test_evidence
-from matsci_agent.multiagent.schemas import (
+from multiagent.artifacts import HarnessArtifactStore
+from multiagent.factory import AgentRegistry, build_agent_registry
+from multiagent.live_suite import scenario_assertion_failures
+from multiagent.repair_validation import validate_repair_test_evidence
+from multiagent.schemas import (
     CodexDebuggerInput,
     CodexDebuggerReport,
     FinalVerifierInput,
@@ -27,9 +27,9 @@ from matsci_agent.multiagent.schemas import (
     RetrievalTesterReport,
     RepairTestEvidence,
 )
-from matsci_agent.multiagent.sdk import configure_sdk
-from matsci_agent.multiagent.settings import MultiAgentSettings
-from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree, run_scoped_live_evaluation, worktree_evidence
+from multiagent.sdk import configure_sdk
+from multiagent.settings import MultiAgentSettings
+from multiagent.tools import build_tool_groups, cleanup_worktree, run_scoped_live_evaluation, worktree_evidence
 
 _MAX_REVIEW_CYCLES = 3
 
@@ -105,8 +105,8 @@ class MultiAgentHarness:
             final_verifier_runner=run_final_verifier,
         )
 
-        def rebind_runtime(repo_root: Path) -> None:
-            scoped_settings = replace(runtime, repo_root=repo_root.resolve())
+        def rebind_runtime(target_root: Path) -> None:
+            scoped_settings = replace(runtime, active_target_root=target_root.resolve())
             scoped_tools = build_tool_groups(sdk, scoped_settings)
             scoped_registry = build_agent_registry(sdk, scoped_settings, scoped_tools)
             registry_holder["value"] = scoped_registry
@@ -126,7 +126,7 @@ class MultiAgentHarness:
         latest_debugger: CodexDebuggerReport | None = None
         latest_repair_test_evidence: RepairTestEvidence | None = None
         latest_verifier: FinalVerifierReport | None = None
-        active_repo_root = self.settings.repo_root
+        active_target_root = self.settings.resolved_target_root
 
         def finish(
             *,
@@ -189,7 +189,7 @@ class MultiAgentHarness:
                 )
             if scenario is not None:
                 live_evidence = self.scenario_evaluator(
-                    replace(self.settings, repo_root=active_repo_root),
+                    replace(self.settings, active_target_root=active_target_root),
                     tester_input.live_evaluation_input,
                 )
                 assertion_failures = scenario_assertion_failures(scenario, live_evidence)
@@ -420,9 +420,9 @@ class MultiAgentHarness:
                 findings=list(verifier_report.review_notes),
             )
             if worktree_path:
-                active_repo_root = Path(worktree_path).resolve()
+                active_target_root = Path(worktree_path).resolve()
                 if self.runtime_rebinder is not None:
-                    self.runtime_rebinder(active_repo_root)
+                    self.runtime_rebinder(active_target_root)
 
         return finish(
             status="fail",

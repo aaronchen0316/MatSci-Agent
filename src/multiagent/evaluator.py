@@ -8,7 +8,7 @@ from matsci_agent.schemas import Candidate, DiscoveryConstraints, DiscoveryFullR
 from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
 from matsci_agent.workflow.graph import DiscoveryWorkflow
 
-from matsci_agent.multiagent.schemas import (
+from multiagent.schemas import (
     CandidateReviewSnapshot,
     CandidateReviewSnapshots,
     CompiledFilterEvidence,

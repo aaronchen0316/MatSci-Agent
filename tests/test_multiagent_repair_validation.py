@@ -3,9 +3,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import matsci_agent.multiagent.repair_validation as repair_validation
-from matsci_agent.multiagent.repair_validation import validate_repair_test_evidence
-from matsci_agent.multiagent.settings import MultiAgentSettings
+import multiagent.repair_validation as repair_validation
+from multiagent.repair_validation import validate_repair_test_evidence
+from multiagent.settings import MultiAgentSettings
 
 
 def _run(args: list[str], cwd: Path) -> None:
@@ -28,7 +28,7 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _settings(repo: Path, tmp_path: Path) -> MultiAgentSettings:
-    return MultiAgentSettings(repo_root=repo, base_branch="multi-agent", worktree_root=tmp_path / "worktrees")
+    return MultiAgentSettings(tool_root=repo, target_repo=repo, target_base_branch="multi-agent", worktree_root=tmp_path / "worktrees")
 
 
 def test_repair_validation_rejects_deleted_or_renamed_tests(tmp_path: Path):

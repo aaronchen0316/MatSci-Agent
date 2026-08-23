@@ -3,16 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from matsci_agent.multiagent.live_suite import run_live_suite
-from matsci_agent.multiagent.orchestrator import MultiAgentHarness
-from matsci_agent.multiagent.publisher import publish_pull_request
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.live_suite import run_live_suite
+from multiagent.orchestrator import MultiAgentHarness
+from multiagent.publisher import publish_and_merge_repair
+from multiagent.settings import MultiAgentSettings
+from multiagent.tools import cleanup_worktree, create_target_base_worktree
 
 app = typer.Typer(help="Experimental multi-agent retrieval-repair harness.")
 console = Console()
@@ -34,7 +36,9 @@ def plan(objective: str) -> None:
                     "disable_tracing": settings.disable_tracing,
                     "enable_live_mp": settings.enable_live_mp,
                     "enable_git_write": settings.enable_git_write,
-                    "base_branch": settings.base_branch,
+                    "tool_root": str(settings.resolved_tool_root),
+                    "target_repo": str(settings.resolved_target_repo),
+                    "target_base_branch": settings.target_base_branch,
                     "repair_branch_prefix": settings.repair_branch_prefix,
                     "artifact_root": str(settings.resolved_artifact_root),
                 },
@@ -53,8 +57,7 @@ def run(objective: str) -> None:
     """
 
     settings = MultiAgentSettings.from_env()
-    harness = MultiAgentHarness.build(settings)
-    result = asyncio.run(harness.run(objective))
+    result = _run_from_target_base(settings, lambda scoped: asyncio.run(MultiAgentHarness.build(scoped).run(objective)))
     console.print_json(result.model_dump_json())
 
 
@@ -63,7 +66,7 @@ def eval_live() -> None:
     """Run credentialed live Materials Project regression scenarios."""
 
     settings = MultiAgentSettings.from_env()
-    result = run_live_suite(settings)
+    result = _run_from_target_base(settings, run_live_suite)
     console.print_json(result.model_dump_json())
     if result.status != "pass":
         raise typer.Exit(code=1)
@@ -76,37 +79,39 @@ def _repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
         return "MULTIAGENT_ENABLE_GIT_WRITE=1 is required"
     status = subprocess.run(
         ["git", "status", "--porcelain"],
-        cwd=str(settings.repo_root),
+        cwd=str(settings.resolved_tool_root),
         capture_output=True,
         text=True,
         check=False,
     )
     if status.returncode != 0 or status.stdout.strip():
-        return "current checkout must be clean before live repair"
-    branch = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=str(settings.repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if branch.returncode != 0 or branch.stdout.strip() != settings.base_branch:
-        return f"current checkout must be base branch {settings.base_branch}"
+        return "tooling checkout must be clean before live repair"
     ref = subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{settings.base_branch}"],
-        cwd=str(settings.repo_root),
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{settings.target_base_branch}"],
+        cwd=str(settings.resolved_target_repo),
         capture_output=True,
         text=True,
         check=False,
     )
-    return None if ref.returncode == 0 else f"base branch does not exist: {settings.base_branch}"
+    return None if ref.returncode == 0 else f"base branch does not exist: {settings.target_base_branch}"
+
+
+def _run_from_target_base(settings: MultiAgentSettings, action):
+    created = create_target_base_worktree(settings)
+    if created["status"] != "created":
+        raise RuntimeError(f"unable to create target base worktree: {created.get('reason', 'unknown error')}")
+    worktree_path = created["worktree_path"]
+    try:
+        return action(replace(settings, active_target_root=Path(worktree_path)))
+    finally:
+        cleanup_worktree(settings, worktree_path)
 
 
 @app.command("repair-live")
 def repair_live(scenario: str = typer.Option(..., "--scenario", help="One named live regression scenario.")) -> None:
     """Repair one credentialed live scenario in an isolated worktree."""
 
-    from matsci_agent.multiagent.live_suite import get_live_scenario
+    from multiagent.live_suite import get_live_scenario
 
     settings = MultiAgentSettings.from_env()
     try:
@@ -117,32 +122,24 @@ def repair_live(scenario: str = typer.Option(..., "--scenario", help="One named 
     if error:
         console.print_json(json.dumps({"status": "blocked", "scenario": selected.name, "summary": error}))
         raise typer.Exit(code=1)
-    harness = MultiAgentHarness.build(settings)
-    result = asyncio.run(harness.run(selected.query, scenario=selected))
+    result = _run_from_target_base(
+        settings,
+        lambda scoped: asyncio.run(MultiAgentHarness.build(scoped).run(selected.query, scenario=selected)),
+    )
     console.print_json(result.model_dump_json())
     if result.status != "pass":
         raise typer.Exit(code=1)
-
-
-@app.command("publish-pr")
-def publish_pr(
-    branch_name: str,
-    base: str | None = typer.Option(None, "--base", help="Pull-request base branch."),
-    artifact_dir: Path | None = typer.Option(None, "--artifact-dir", exists=True, file_okay=False),
-    validation_only: bool = typer.Option(False, "--validation-only"),
-    reason: str | None = typer.Option(None, "--reason"),
-) -> None:
-    """Push one guarded repair branch and create a draft GitHub pull request."""
-
-    settings = MultiAgentSettings.from_env()
-    result = publish_pull_request(
+    if result.branch_name is None or result.artifact_dir is None:
+        return
+    publication = publish_and_merge_repair(
         settings,
-        branch_name=branch_name,
-        base_branch=base or settings.base_branch,
-        artifact_dir=artifact_dir,
-        validation_only=validation_only,
-        reason=reason,
+        branch_name=result.branch_name,
+        artifact_dir=Path(result.artifact_dir),
     )
-    console.print_json(result.model_dump_json())
-    if result.status != "published":
+    console.print_json(publication.model_dump_json())
+    if publication.status != "merged":
         raise typer.Exit(code=1)
+
+
+if __name__ == "__main__":
+    app()

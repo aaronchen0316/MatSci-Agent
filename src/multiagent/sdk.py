@@ -5,7 +5,7 @@ from types import ModuleType
 
 from openai import AsyncOpenAI
 
-from matsci_agent.multiagent.settings import MultiAgentSettings
+from multiagent.settings import MultiAgentSettings
 
 
 def load_openai_agents_sdk() -> ModuleType:

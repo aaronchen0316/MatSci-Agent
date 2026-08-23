@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import matsci_agent.multiagent.sdk as harness_sdk
-from matsci_agent.multiagent.settings import MultiAgentSettings
+import multiagent.sdk as harness_sdk
+from multiagent.settings import MultiAgentSettings
 
 
 def test_configure_sdk_uses_one_shared_client_and_disables_tracing(monkeypatch, tmp_path):
@@ -15,7 +15,7 @@ def test_configure_sdk_uses_one_shared_client_and_disables_tracing(monkeypatch, 
     )
     monkeypatch.setattr(harness_sdk, "load_openai_agents_sdk", lambda: fake_sdk)
     monkeypatch.setattr(harness_sdk, "AsyncOpenAI", lambda **kwargs: {"client": kwargs})
-    settings = MultiAgentSettings(repo_root=tmp_path, api_key="token", base_url="https://example.test/v1")
+    settings = MultiAgentSettings(tool_root=tmp_path, target_repo=tmp_path, api_key="token", base_url="https://example.test/v1")
 
     configured = harness_sdk.configure_sdk(settings)
 
