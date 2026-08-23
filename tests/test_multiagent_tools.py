@@ -88,16 +88,16 @@ def test_worktree_edit_diff_and_commit_flow(tmp_path: Path):
     assert len(committed["commit_sha"]) == 40
 
 
-def test_worktree_creation_fails_fast_on_existing_branch_and_path(tmp_path: Path):
+def test_worktree_creation_allocates_safe_suffix_for_retained_branch_and_path(tmp_path: Path):
     repo = _make_repo(tmp_path)
     tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
 
     created = json.loads(tools["create_branch_worktree"]("fix/retrieval-2"))
     assert created["status"] == "created"
 
-    blocked = json.loads(tools["create_branch_worktree"]("fix/retrieval-2"))
-    assert blocked["status"] == "blocked"
-    assert blocked["reason"] in {"worktree path already exists", "branch already exists"}
+    retried = json.loads(tools["create_branch_worktree"]("fix/retrieval-2"))
+    assert retried["status"] == "created"
+    assert retried["branch_name"] == "fix/retrieval-2-2"
 
 
 def test_mutation_tool_rejects_disallowed_path(tmp_path: Path):

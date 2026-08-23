@@ -308,28 +308,36 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
 
         root = settings.worktree_root.resolve()
         root.mkdir(parents=True, exist_ok=True)
-        worktree_path = _resolve_under(root, safe_branch)
-        if worktree_path.exists():
-            return json.dumps(
-                {
-                    "status": "blocked",
-                    "reason": "worktree path already exists",
-                    "branch_name": safe_branch,
-                    "worktree_path": str(worktree_path),
-                }
+        selected_branch = safe_branch
+        worktree_path = _resolve_under(root, selected_branch)
+        for suffix in range(2, 100):
+            branch_check = _run_completed(
+                ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{selected_branch}"],
+                settings.resolved_target_repo,
             )
-        branch_check = _run_completed(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{safe_branch}"], settings.resolved_target_repo)
-        if branch_check.returncode == 0:
+            if not worktree_path.exists() and branch_check.returncode != 0:
+                break
+            try:
+                selected_branch = _validate_branch_name(f"{safe_branch}-{suffix}", require_fix_namespace=True)
+            except ValueError:
+                return json.dumps(
+                    {
+                        "status": "blocked",
+                        "reason": "no safe unique repair branch name is available",
+                        "branch_name": safe_branch,
+                    }
+                )
+            worktree_path = _resolve_under(root, selected_branch)
+        else:
             return json.dumps(
                 {
                     "status": "blocked",
-                    "reason": "branch already exists",
+                    "reason": "no safe unique repair branch name is available",
                     "branch_name": safe_branch,
-                    "worktree_path": str(worktree_path),
                 }
             )
         result = _run_completed(
-            ["git", "worktree", "add", "-b", safe_branch, str(worktree_path), settings.target_base_ref],
+            ["git", "worktree", "add", "-b", selected_branch, str(worktree_path), settings.target_base_ref],
             settings.resolved_target_repo,
         )
         if result.returncode != 0:
@@ -337,7 +345,7 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
                 {
                     "status": "error",
                     "reason": "git worktree add failed",
-                    "branch_name": safe_branch,
+                    "branch_name": selected_branch,
                     "worktree_path": str(worktree_path),
                     "output": _output(result),
                 }
@@ -345,7 +353,7 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         return json.dumps(
             {
                 "status": "created",
-                "branch_name": safe_branch,
+                "branch_name": selected_branch,
                 "worktree_path": str(worktree_path),
                 "output": _output(result),
             }
