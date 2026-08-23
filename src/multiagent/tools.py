@@ -19,20 +19,11 @@ _MUTABLE_PATH_PREFIXES = (
     "src/matsci_agent/",
     "tests/",
 )
-_MUTABLE_SUFFIXES = {
-    ".py",
-    ".md",
-    ".toml",
-    ".yml",
-    ".yaml",
-    ".json",
-    ".txt",
-}
+_MUTABLE_SUFFIXES = {".py"}
 
 
 @dataclass(frozen=True)
 class ToolGroups:
-    shared: list[object]
     tester: list[object]
     critic: list[object]
     debugger: list[object]
@@ -131,6 +122,31 @@ def _worktree_file(settings: MultiAgentSettings, worktree_path: str, relative_pa
     if not path.is_file():
         raise ValueError(f"file does not exist: {relative_path}")
     return path
+
+
+def _target_file(settings: MultiAgentSettings, relative_path: str) -> Path:
+    if not _is_mutable_relative_path(relative_path):
+        raise ValueError(f"path not allowlisted for product inspection: {relative_path}")
+    path = _resolve_under(settings.resolved_target_root, relative_path, require_exists=True)
+    if not path.is_file():
+        raise ValueError(f"file does not exist: {relative_path}")
+    return path
+
+
+def _test_targets(root: Path, targets: list[str]) -> list[str]:
+    if not targets or len(targets) > 10:
+        raise ValueError("provide between 1 and 10 test targets")
+    tests_root = (root / "tests").resolve()
+    normalized: list[str] = []
+    for target in targets:
+        normalized_target = _normalized_relative_path(target)
+        if normalized_target is None or not normalized_target.startswith("tests/") or Path(normalized_target).suffix != ".py":
+            raise ValueError(f"test target not allowed: {target}")
+        path = _resolve_under(root, normalized_target, require_exists=True)
+        if not path.is_file() or not _is_under(tests_root, path) or path == tests_root:
+            raise ValueError(f"test target is not a file: {target}")
+        normalized.append(str(path.relative_to(root)))
+    return normalized
 
 
 def _numbered_slice(path: Path, start_line: int = 1, end_line: int = 240) -> str:
@@ -232,69 +248,11 @@ def run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalIn
 def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
     """Create narrow typed tool surfaces for each specialist agent."""
 
-    def read_context_snapshot() -> str:
-        """Return compact project context needed by retrieval-repair agents."""
+    def read_target_file(relative_path: str, start_line: int = 1, end_line: int = 240) -> str:
+        """Read one product or test file slice from the active product checkout."""
 
-        context_path = settings.resolved_target_root / "CONTEXT.md"
-        readme_path = settings.resolved_target_root / "README.md"
-        return "".join(
-            [
-                "# CONTEXT.md\n",
-                context_path.read_text()[:12000],
-                "\n\n# README.md\n",
-                readme_path.read_text()[:12000],
-            ]
-        )
-
-    def read_repo_file(relative_path: str, start_line: int = 1, end_line: int = 240) -> str:
-        """Read one text file slice under the repository root."""
-
-        path = _resolve_under(settings.resolved_target_root, relative_path, require_exists=True)
-        if not path.is_file():
-            raise ValueError(f"not a file: {relative_path}")
+        path = _target_file(settings, relative_path)
         return _numbered_slice(path, start_line=start_line, end_line=end_line)
-
-    def list_repo_files(relative_dir: str = "src") -> list[str]:
-        """List files beneath one repository directory without shell expansion."""
-
-        root = _resolve_under(settings.resolved_target_root, relative_dir, require_exists=True)
-        if not root.is_dir():
-            raise ValueError(f"not a directory: {relative_dir}")
-        return sorted(str(path.relative_to(settings.resolved_target_root)) for path in root.rglob("*") if path.is_file())
-
-    def read_git_status() -> str:
-        """Read repository Git status."""
-
-        return _output(_run_completed(["git", "status", "--short"], settings.resolved_target_root))
-
-    def read_git_diff() -> str:
-        """Read repository Git diff without mutation."""
-
-        return _output(_run_completed(["git", "diff", "--"], settings.resolved_target_root))
-
-    def read_git_log(limit: int = 10) -> str:
-        """Read a bounded recent Git log."""
-
-        if not 1 <= limit <= 50:
-            raise ValueError("limit must be between 1 and 50")
-        return _output(_run_completed(["git", "log", f"-{limit}", "--oneline"], settings.resolved_target_root))
-
-    def run_pytest_targets(targets: list[str]) -> str:
-        """Run bounded pytest file targets under tests/ only."""
-
-        if not targets or len(targets) > 10:
-            raise ValueError("provide between 1 and 10 test targets")
-        tests_root = (settings.resolved_target_root / "tests").resolve()
-        normalized: list[str] = []
-        for target in targets:
-            normalized_target = _normalized_relative_path(target)
-            if normalized_target is None or not normalized_target.startswith("tests/") or Path(normalized_target).suffix != ".py":
-                raise ValueError(f"test target not allowed: {target}")
-            path = _resolve_under(settings.resolved_target_root, normalized_target, require_exists=True)
-            if not path.is_file() or not _is_under(tests_root, path) or path == tests_root:
-                raise ValueError(f"test target is not a file: {target}")
-            normalized.append(str(path.relative_to(settings.resolved_target_root)))
-        return _output(_run_completed(["uv", "run", "pytest", "-q", *normalized], settings.resolved_target_root))
 
     def create_branch_worktree(branch_name: str) -> str:
         """Create a validated isolated worktree for debugger changes."""
@@ -373,6 +331,13 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
         """Read isolated-worktree full patch."""
 
         return _output(_run_completed(["git", "diff", "--"], _worktree_dir(settings, worktree_path)))
+
+    def run_worktree_pytest(worktree_path: str, targets: list[str]) -> str:
+        """Run bounded changed-test file targets from a managed repair worktree."""
+
+        worktree = _worktree_dir(settings, worktree_path)
+        normalized = _test_targets(worktree, targets)
+        return _output(_run_completed(["uv", "run", "pytest", "-q", "--", *normalized], worktree))
 
     def apply_worktree_text_edit(
         worktree_path: str,
@@ -457,28 +422,20 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
 
         return _run_scoped_live_evaluation(settings, payload).model_dump(mode="json")
 
-    shared = [
-        sdk.function_tool(read_context_snapshot),
-        sdk.function_tool(read_repo_file),
-        sdk.function_tool(list_repo_files),
-        sdk.function_tool(read_git_status),
-        sdk.function_tool(read_git_diff),
-        sdk.function_tool(read_git_log),
-        sdk.function_tool(run_pytest_targets),
-    ]
-    tester = list(shared) + [sdk.function_tool(run_live_retrieval_eval)]
-    critic = list(shared)
-    verifier = list(shared) + [
+    tester = [sdk.function_tool(run_live_retrieval_eval)]
+    critic: list[object] = []
+    verifier = [
         sdk.function_tool(read_worktree_file),
-        sdk.function_tool(read_worktree_diff),
         sdk.function_tool(read_worktree_patch),
     ]
-    debugger = list(shared) + [
+    debugger = [
+        sdk.function_tool(read_target_file),
         sdk.function_tool(create_branch_worktree),
         sdk.function_tool(read_worktree_file),
         sdk.function_tool(apply_worktree_text_edit),
+        sdk.function_tool(run_worktree_pytest),
         sdk.function_tool(commit_worktree_changes),
         sdk.function_tool(read_worktree_diff),
         sdk.function_tool(read_worktree_patch),
     ]
-    return ToolGroups(shared=shared, tester=tester, critic=critic, debugger=debugger, verifier=verifier)
+    return ToolGroups(tester=tester, critic=critic, debugger=debugger, verifier=verifier)

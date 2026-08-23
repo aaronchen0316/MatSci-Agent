@@ -232,20 +232,21 @@ def test_tool_groups_keep_mutation_limited_to_debugger(tmp_path: Path):
     assert "read_worktree_patch" in verifier_names
     assert "read_worktree_file" in verifier_names
 
-    assert "run_live_retrieval_eval" in tester_names
+    assert tester_names == {"run_live_retrieval_eval"}
     assert "apply_worktree_text_edit" not in tester_names
     assert "read_worktree_patch" not in tester_names
-    assert "run_live_retrieval_eval" not in critic_names
-    assert "apply_worktree_text_edit" not in critic_names
-    assert "read_worktree_patch" not in critic_names
+    assert critic_names == set()
+    assert "run_worktree_pytest" in debugger_names
+    assert "read_target_file" in debugger_names
+    assert "run_live_retrieval_eval" not in verifier_names
     assert "run_readonly_repo_command" not in debugger_names
     assert "create_pull_request" not in debugger_names
 
 
-def test_structured_pytest_tool_rejects_shell_like_targets(tmp_path: Path):
+def test_debugger_pytest_tool_rejects_shell_like_targets(tmp_path: Path):
     repo = _make_repo(tmp_path)
-    groups = build_tool_groups(FakeSDK(), _settings(repo, tmp_path))
-    tools = _tool_map(groups.shared)
+    tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-pytest"))
 
     for target in [
         "tests/sample.py; touch /tmp/pwned",
@@ -254,7 +255,7 @@ def test_structured_pytest_tool_rejects_shell_like_targets(tmp_path: Path):
         "src/module.py",
     ]:
         try:
-            tools["run_pytest_targets"]([target])
+            tools["run_worktree_pytest"](created["worktree_path"], [target])
         except ValueError as exc:
             assert "not allowed" in str(exc)
         else:

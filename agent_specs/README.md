@@ -51,7 +51,7 @@ Recommended env:
 - `MULTIAGENT_API_KEY`
 - `MULTIAGENT_BASE_URL`
 - `MULTIAGENT_MODEL=gpt-5.4-mini`
-- `MULTIAGENT_MAX_TURNS=20`
+- `MULTIAGENT_MAX_TURNS=30`
 
 Tracing note:
 - if you use non-OpenAI proxy key, disable tracing by default
@@ -85,21 +85,10 @@ uv sync --extra dev --extra agents
 ## Entry point
 
 ```bash
-uv run matsci-multiagent plan "Eval and repair retrieval quality for current code base"
-uv run matsci-multiagent eval-live
-MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent audit-repairs
-MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent repair-suite
+MULTIAGENT_ENABLE_LIVE_MP=1 uv run matsci-multiagent validate
+MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent validate-repair
 ```
 
-Later, when ready to run real model calls:
+Both commands preflight `gpt-5.4-mini` through the configured proxy and need MP plus LLM credentials. They write evidence under the ignored artifact root.
 
-```bash
-export MULTIAGENT_API_KEY="..."
-export MULTIAGENT_BASE_URL="https://your-openai-compatible-endpoint/v1"
-export MULTIAGENT_MODEL="gpt-5.4-mini"
-uv run matsci-multiagent run "Eval and repair retrieval quality for current code base"
-```
-
-`eval-live` is intentionally opt-in. It needs MP and LLM credentials and writes evidence under the ignored artifact root.
-
-All live repairs start from current `origin/main`; no local `main` checkout is modified. `audit-repairs` only records whether retained branches are eligible and never pushes or opens a PR. `repair-suite` is the production loop: it audits legacy branches, runs the eight live cases, repairs each current failure once, then publishes only fresh `fix/<issue>` results with exact-SHA CI evidence. SSH pushes `fix/<issue>`, GitHub Actions validates the exact PR SHA, then the harness requests a squash merge to `main`. `GITHUB_TOKEN` is only used for GitHub API calls; no token is printed or stored in artifacts.
+All repairs start from current `origin/main`; no local `main` checkout is modified. `validate-repair` repairs each failed case once and publishes only fresh `fix/<issue>` results with exact-SHA CI evidence. SSH pushes `fix/<issue>`, GitHub Actions validates the exact PR SHA, then the harness requests a squash merge to `main`. `GITHUB_TOKEN` is only used for GitHub API calls; no token is printed or stored in artifacts.

@@ -10,10 +10,9 @@ from multiagent.schemas import (
     LiveEvalSuiteReport,
     ModelPreflightReport,
     PullRequestPublication,
-    RepairAuditReport,
 )
 from multiagent.settings import MultiAgentSettings
-from multiagent.suite import run_repair_suite
+from multiagent.validation_repair import run_validation_repair
 
 
 def _settings(tmp_path: Path) -> MultiAgentSettings:
@@ -59,7 +58,7 @@ def _harness_report(scenario: str, status: str = "fail") -> HarnessRunReport:
     )
 
 
-def test_repair_suite_attempts_each_initial_failure_once_and_retests_after_merge(tmp_path: Path):
+def test_validation_repair_attempts_each_failure_once_and_retests_after_merge(tmp_path: Path):
     settings = _settings(tmp_path)
     evaluations = [_suite("volume", "formation_energy"), _suite("formation_energy"), _suite("formation_energy")]
     repaired: list[str] = []
@@ -79,10 +78,9 @@ def test_repair_suite_attempts_each_initial_failure_once_and_retests_after_merge
             )
         return _harness_report(scenario.name, "blocked"), None
 
-    report = run_repair_suite(
+    report = run_validation_repair(
         settings,
         _preflight(),
-        audit_runner=lambda _settings: RepairAuditReport(status="fail", target_base_branch="main"),
         evaluator=evaluator,
         repair_runner=repair,
         base_refresher=lambda _settings: refreshes.append("main") or None,
@@ -93,19 +91,18 @@ def test_repair_suite_attempts_each_initial_failure_once_and_retests_after_merge
     assert report.status == "fail"
     assert [attempt.scenario_name for attempt in report.attempts] == repaired
     artifact = Path(report.artifact_dir or "")
-    assert (artifact / "baseline_live_suite.json").is_file()
-    assert (artifact / "retests/2_live_suite.json").is_file()
-    assert (artifact / "final_live_suite.json").is_file()
+    assert (artifact / "baseline_validation.json").is_file()
+    assert (artifact / "retests/2_validation.json").is_file()
+    assert (artifact / "final_validation.json").is_file()
 
 
-def test_repair_suite_fails_when_merged_base_cannot_refresh(tmp_path: Path):
+def test_validation_repair_fails_when_merged_base_cannot_refresh(tmp_path: Path):
     settings = _settings(tmp_path)
     evaluations = [_suite("volume"), _suite("volume")]
 
-    report = run_repair_suite(
+    report = run_validation_repair(
         settings,
         _preflight(),
-        audit_runner=lambda _settings: RepairAuditReport(status="pass", target_base_branch="main"),
         evaluator=lambda _settings: evaluations.pop(0),
         repair_runner=lambda _settings, scenario: (
             _harness_report(scenario.name),

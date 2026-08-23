@@ -32,17 +32,17 @@ Implementation shape:
 5. Make Python orchestrator own retry order and stop conditions: tester -> critic -> debugger -> verifier.
 6. Do not create a Controller Agent. Python remains sole scheduler and emits final success only after Tester pass, Critic agreement, and real MP evidence.
 7. Treat Final Verifier as a patch-acceptance gate. Its accepted patches require a fresh Tester + Critic cycle and cannot directly pass the harness.
-8. Keep git mutation disabled by default behind an explicit env flag. Normal `run` never pushes or opens PRs; a fully passing `repair-live` may publish only its product repair.
+8. Expose only two public commands: read-only `validate` and guarded `validate-repair`. Git mutation is disabled by default; only `validate-repair` may publish a product repair.
 9. Prefer isolated worktree branches for debugger changes, reuse one repair branch across retries, then remove clean worktrees while retaining branches.
 10. Record non-secret run artifacts and typed agent handoffs under ignored local storage.
 11. Preserve the current deterministic `DiscoveryWorkflow` as execution source of truth.
 12. Rebind Tester and Critic tools to an accepted repair worktree; execute live evaluation in a subprocess importing that worktree's source tree.
-13. Bind `repair-live` to one named live scenario and enforce its exact query, constraints, and quality assertions on initial and repaired-worktree evaluation.
+13. `validate-repair` internally binds each failed named live scenario to its exact query, constraints, and quality assertions on initial and repaired-worktree evaluation.
 14. Require deterministic repair-test evidence: changed test collection/pass, full-suite pass, no deleted or renamed tests, and no per-file line-coverage regression for changed production files.
 15. Run tooling from `multi-agent`, but create product-only `fix/<issue>` worktrees from current `origin/main`; tooling files and prompts are never mutable repair paths.
-16. Audit retained repair branches read-only against current `origin/main`. Historical branches never bypass namespace, ancestry, product-diff, evidence-SHA, test, verifier, or fresh-live gates.
+16. Retained historical branches have no migration or publication path. Every new repair starts from current `origin/main` and must independently satisfy namespace, product-diff, test, verifier, and fresh-live gates.
 17. Preflight `gpt-5.4-mini` through the configured proxy before live work. Retry both harness and product model settings with `gpt-5.5` only when the primary error explicitly says the model is unavailable.
-18. `repair-suite` runs the live eight-case baseline, gives every current failure one fresh repair attempt, refreshes `origin/main` and re-evaluates all eight after each merge, then always records one final eight-case suite.
+18. `validate-repair` runs the live eight-case baseline, gives every current failure one fresh 30-turn repair attempt, refreshes `origin/main` and re-evaluates all eight after each merge, then always records one final eight-case validation.
 19. After stored passing evidence, push the product branch via SSH, create a ready PR to `main`, wait for GitHub Actions on the exact validated PR head SHA, and request an exact-SHA squash merge with `GITHUB_TOKEN`. Failed gates retain branch and artifacts without merge.
 
 ## Consequences

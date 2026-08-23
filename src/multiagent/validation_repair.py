@@ -7,25 +7,21 @@ from dataclasses import replace
 from pathlib import Path
 
 from multiagent.artifacts import HarnessArtifactStore
-from multiagent.audit import audit_repair_branches
-from multiagent.live_suite import LIVE_EVAL_SCENARIOS, run_live_suite
+from multiagent.live_suite import LiveEvalScenario, LiveEvalSuiteReport, run_live_suite
 from multiagent.orchestrator import MultiAgentHarness
 from multiagent.publisher import publish_and_merge_repair
 from multiagent.schemas import (
     HarnessRunReport,
-    LiveEvalScenario,
-    LiveEvalSuiteReport,
     ModelPreflightReport,
     PullRequestPublication,
-    RepairAuditReport,
-    RepairSuiteAttempt,
-    RepairSuiteReport,
+    ValidationRepairAttempt,
+    ValidationRepairReport,
 )
 from multiagent.settings import MultiAgentSettings
 from multiagent.tools import cleanup_worktree, create_target_base_worktree
 
 
-def repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
+def validation_repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
     if not settings.enable_live_mp:
         return "MULTIAGENT_ENABLE_LIVE_MP=1 is required"
     if not settings.enable_git_write:
@@ -38,7 +34,13 @@ def repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
         check=False,
     )
     if status.returncode != 0 or status.stdout.strip():
-        return "tooling checkout must be clean before live repair"
+        return "tooling checkout must be clean before validation-repair"
+    return refresh_target_base(settings)
+
+
+def refresh_target_base(settings: MultiAgentSettings) -> str | None:
+    """Refresh the remote product baseline used by every isolated evaluation."""
+
     fetched = subprocess.run(
         ["git", "fetch", "origin", settings.target_base_branch],
         cwd=str(settings.resolved_target_repo),
@@ -47,7 +49,7 @@ def repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
         check=False,
     )
     if fetched.returncode != 0:
-        return f"unable to refresh {settings.target_base_ref} before live repair"
+        return f"unable to refresh {settings.target_base_ref}"
     remote = subprocess.run(
         ["git", "rev-parse", "--verify", settings.target_base_ref],
         cwd=str(settings.resolved_target_repo),
@@ -60,22 +62,7 @@ def repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
     return None
 
 
-def refresh_target_base(settings: MultiAgentSettings) -> str | None:
-    """Advance the remote-tracking product baseline after an automated merge."""
-
-    result = subprocess.run(
-        ["git", "fetch", "origin", settings.target_base_branch],
-        cwd=str(settings.resolved_target_repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return f"unable to refresh {settings.target_base_ref} after merge"
-    return None
-
-
-def run_from_target_base(settings: MultiAgentSettings, action):
+def run_in_product_worktree(settings: MultiAgentSettings, action):
     created = create_target_base_worktree(settings)
     if created["status"] != "created":
         raise RuntimeError(f"unable to create target base worktree: {created.get('reason', 'unknown error')}")
@@ -86,20 +73,20 @@ def run_from_target_base(settings: MultiAgentSettings, action):
         cleanup_worktree(settings, worktree_path)
 
 
-def evaluate_live_suite_from_target(settings: MultiAgentSettings) -> LiveEvalSuiteReport:
-    return run_from_target_base(settings, run_live_suite)
+def run_live_validation(settings: MultiAgentSettings) -> LiveEvalSuiteReport:
+    return run_in_product_worktree(settings, run_live_suite)
 
 
-def run_single_repair(
+def run_scenario_repair(
     settings: MultiAgentSettings,
     scenario: LiveEvalScenario,
     *,
     harness_builder: Callable[[MultiAgentSettings], MultiAgentHarness] = MultiAgentHarness.build,
     publisher: Callable[..., PullRequestPublication] = publish_and_merge_repair,
 ) -> tuple[HarnessRunReport, PullRequestPublication | None]:
-    report = run_from_target_base(
+    report = run_in_product_worktree(
         settings,
-        lambda scoped: asyncio.run(harness_builder(scoped).run(scenario.query, scenario=scenario)),
+        lambda scoped: asyncio.run(harness_builder(scoped).repair_scenario(scenario)),
     )
     if report.status != "pass" or report.branch_name is None or report.artifact_dir is None:
         return report, None
@@ -116,29 +103,26 @@ def _failed_scenarios(report: LiveEvalSuiteReport) -> list[LiveEvalScenario]:
     ]
 
 
-def _suite_status(final: LiveEvalSuiteReport) -> str:
+def _validation_status(final: LiveEvalSuiteReport) -> str:
     return "blocked" if final.status == "blocked" else "pass" if final.status == "pass" else "fail"
 
 
-def run_repair_suite(
+def run_validation_repair(
     settings: MultiAgentSettings,
     model_preflight: ModelPreflightReport,
     *,
-    audit_runner: Callable[[MultiAgentSettings], RepairAuditReport] = audit_repair_branches,
-    evaluator: Callable[[MultiAgentSettings], LiveEvalSuiteReport] = evaluate_live_suite_from_target,
-    repair_runner: Callable[[MultiAgentSettings, LiveEvalScenario], tuple[HarnessRunReport, PullRequestPublication | None]] = run_single_repair,
+    evaluator: Callable[[MultiAgentSettings], LiveEvalSuiteReport] = run_live_validation,
+    repair_runner: Callable[[MultiAgentSettings, LiveEvalScenario], tuple[HarnessRunReport, PullRequestPublication | None]] = run_scenario_repair,
     base_refresher: Callable[[MultiAgentSettings], str | None] = refresh_target_base,
-) -> RepairSuiteReport:
-    """Repair every currently failing live scenario once, retesting all eight after each merge."""
+) -> ValidationRepairReport:
+    """Validate eight live scenarios, repair each failure once, then revalidate."""
 
-    store = HarnessArtifactStore.create(settings, "multiagent_repair_suite")
-    audit = audit_runner(settings)
-    store.write_model("repair_audit_report.json", audit)
+    store = HarnessArtifactStore.create(settings, "multiagent_validation_repair")
     store.write_model("model_preflight.json", model_preflight)
 
     baseline = evaluator(settings)
-    store.write_model("baseline_live_suite.json", baseline)
-    attempts: list[RepairSuiteAttempt] = []
+    store.write_model("baseline_validation.json", baseline)
+    attempts: list[ValidationRepairAttempt] = []
     current = baseline
     attempted: set[str] = set()
     refresh_error: str | None = None
@@ -150,30 +134,24 @@ def run_repair_suite(
         scenario = pending[0]
         attempted.add(scenario.name)
         harness_report, publication = repair_runner(settings, scenario)
-        attempts.append(
-            RepairSuiteAttempt(
-                scenario_name=scenario.name,
-                harness_report=harness_report,
-                publication=publication,
-                summary=(
-                    publication.summary
-                    if publication is not None
-                    else harness_report.summary
-                ),
-            )
+        attempt = ValidationRepairAttempt(
+            scenario_name=scenario.name,
+            harness_report=harness_report,
+            publication=publication,
+            summary=publication.summary if publication is not None else harness_report.summary,
         )
-        store.write_model(f"attempts/{len(attempts)}/{scenario.name}.json", attempts[-1])
+        attempts.append(attempt)
+        store.write_model(f"attempts/{len(attempts)}/{scenario.name}.json", attempt)
         if publication is not None and publication.status == "merged":
             refresh_error = base_refresher(settings)
-            if refresh_error is None:
-                current = evaluator(settings)
-                store.write_model(f"retests/{len(attempts)}_live_suite.json", current)
-            else:
+            if refresh_error is not None:
                 break
+            current = evaluator(settings)
+            store.write_model(f"retests/{len(attempts)}_validation.json", current)
 
     final = evaluator(settings)
-    store.write_model("final_live_suite.json", final)
-    status = "fail" if refresh_error else _suite_status(final)
+    store.write_model("final_validation.json", final)
+    status = "fail" if refresh_error else _validation_status(final)
     summary = (
         refresh_error
         if refresh_error
@@ -181,36 +159,32 @@ def run_repair_suite(
         if status == "pass"
         else "one or more live scenarios remain failed or blocked"
     )
-    report = RepairSuiteReport(
+    report = ValidationRepairReport(
         status=status,
         summary=summary,
         artifact_dir=str(store.run_dir),
         model_preflight=model_preflight,
-        audit_report=audit,
         baseline=baseline,
         attempts=attempts,
         final=final,
     )
-    store.write_model("repair_suite_report.json", report)
+    store.write_model("validation_repair_report.json", report)
     return report
 
 
-def blocked_repair_suite(
+def blocked_validation_repair(
     settings: MultiAgentSettings,
     model_preflight: ModelPreflightReport,
     *,
     summary: str,
-) -> RepairSuiteReport:
-    store = HarnessArtifactStore.create(settings, "multiagent_repair_suite")
-    audit = audit_repair_branches(settings)
-    report = RepairSuiteReport(
+) -> ValidationRepairReport:
+    store = HarnessArtifactStore.create(settings, "multiagent_validation_repair")
+    report = ValidationRepairReport(
         status="blocked",
         summary=summary,
         artifact_dir=str(store.run_dir),
         model_preflight=model_preflight,
-        audit_report=audit,
     )
     store.write_model("model_preflight.json", model_preflight)
-    store.write_model("repair_audit_report.json", audit)
-    store.write_model("repair_suite_report.json", report)
+    store.write_model("validation_repair_report.json", report)
     return report

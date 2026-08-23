@@ -16,6 +16,7 @@ from multiagent.schemas import (
     FinalVerifierInput,
     FinalVerifierReport,
     LiveEvalEvidence,
+    LiveEvalScenario,
     MaterialsQueryCriticInput,
     MaterialsQueryCriticReport,
     RefreshFeedback,
@@ -36,6 +37,10 @@ def _settings(tmp_path: Path) -> MultiAgentSettings:
     )
 
 
+def _scenario(query: str = "find oxides") -> LiveEvalScenario:
+    return LiveEvalScenario(name="fixture", query=query)
+
+
 def _live_evidence(*, real_source_used: bool = True, include_snapshots: bool = True) -> LiveEvalEvidence:
     snapshot = CandidateReviewSnapshot(material_id="mp-1", formula="TiO2", elements=["O", "Ti"], mp_band_gap_ev=3.0)
     snapshots = CandidateReviewSnapshots(
@@ -46,6 +51,7 @@ def _live_evidence(*, real_source_used: bool = True, include_snapshots: bool = T
     return LiveEvalEvidence(
         status="pass",
         query="find oxides",
+        result_counts=StageCounts(raw_count=1, filtered_count=1, ranked_count=1),
         candidate_snapshots=snapshots,
         real_source_used=real_source_used,
     )
@@ -136,12 +142,37 @@ def _make_harness(
     critic_calls: list[MaterialsQueryCriticInput] | None = None,
     debugger_calls: list[CodexDebuggerInput] | None = None,
     verifier_calls: list[FinalVerifierInput] | None = None,
+    evaluator_results: Sequence[LiveEvalEvidence] | None = None,
 ) -> MultiAgentHarness:
     tester_log = tester_calls if tester_calls is not None else []
     critic_log = critic_calls if critic_calls is not None else []
     debugger_log = debugger_calls if debugger_calls is not None else []
     verifier_log = verifier_calls if verifier_calls is not None else []
-    return MultiAgentHarness(
+    evaluator_values = list(evaluator_results or [])
+    if not evaluator_values:
+        for report in tester_results:
+            if report.live_evaluation is not None:
+                evaluator_values.append(report.live_evaluation)
+            elif report.status == "blocked":
+                evaluator_values.append(LiveEvalEvidence(status="blocked", query="", blocked_reason="live unavailable"))
+            else:
+                evaluator_values.append(
+                    LiveEvalEvidence(
+                        status="pass" if report.status == "pass" else "fail",
+                        query="",
+                        failed_stage=report.failed_stage,
+                        real_source_used=report.status == "pass",
+                    )
+                )
+    evaluator_index = 0
+
+    def evaluate(_settings, payload):
+        nonlocal evaluator_index
+        value = evaluator_values[min(evaluator_index, len(evaluator_values) - 1)]
+        evaluator_index += 1
+        return value.model_copy(update={"query": payload.query})
+
+    harness = MultiAgentHarness(
         settings=_settings(tmp_path),
         sdk=None,
         registry=None,
@@ -150,6 +181,9 @@ def _make_harness(
         codex_debugger_runner=_sequence_runner(debugger_results or [], debugger_log),
         final_verifier_runner=_sequence_runner(verifier_results or [], verifier_log),
     )
+    harness.scenario_evaluator = evaluate
+    harness.repair_test_validator = lambda *_args: RepairTestEvidence(status="pass")
+    return harness
 
 
 def test_orchestrator_dual_review_passes_only_with_real_evidence(tmp_path: Path):
@@ -163,14 +197,14 @@ def test_orchestrator_dual_review_passes_only_with_real_evidence(tmp_path: Path)
         critic_calls=critic_calls,
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "pass"
     assert report.stop_reason == "dual_review_pass"
     assert report.attempt_count == 1
     assert report.attempts[0].stop_reason_fragment == "dual_review_pass"
     assert len(tester_calls) == 1
-    assert critic_calls[0].objective == "find oxides"
+    assert critic_calls[0].objective == _scenario().query
     assert critic_calls[0].review_evidence == report.latest_tester_report.live_evaluation
     artifact_dir = Path(report.artifact_dir or "")
     assert (artifact_dir / "attempts/1/materials_query_critic_input.json").is_file()
@@ -196,7 +230,7 @@ def test_orchestrator_blocks_dual_approval_without_real_candidate_evidence(
         critic_results=[_critic_report("agree")],
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "blocked"
     assert report.stop_reason == "scientific_evidence_blocked"
@@ -210,7 +244,7 @@ def test_orchestrator_stops_when_tester_is_blocked_without_critic(tmp_path: Path
         critic_calls=critic_calls,
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "blocked"
     assert report.stop_reason == "tester_blocked"
@@ -228,7 +262,7 @@ def test_tester_pass_critic_dissent_enters_repair_loop(tmp_path: Path):
         debugger_calls=debugger_calls,
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "fail"
     assert report.stop_reason == "verifier_fail"
@@ -244,7 +278,7 @@ def test_tester_failure_critic_agreement_enters_repair_loop(tmp_path: Path):
         verifier_results=[_verifier_report("fail", "patch not sufficient")],
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "fail"
     assert report.stop_reason == "verifier_fail"
@@ -268,7 +302,7 @@ def test_repair_loop_uses_configured_branch_prefix(tmp_path: Path):
         repair_branch_prefix="retrieval-fix-retry",
     )
 
-    asyncio.run(harness.run("find oxides"))
+    asyncio.run(harness.repair_scenario(_scenario()))
 
     assert debugger_calls[0].target_branch_prefix == "retrieval-fix-retry"
 
@@ -287,7 +321,7 @@ def test_tester_failure_critic_dissent_refreshes_before_patch(tmp_path: Path):
         debugger_calls=debugger_calls,
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.stop_reason == "dual_review_pass"
     assert report.attempt_count == 2
@@ -318,7 +352,7 @@ def test_verifier_accepted_requires_fresh_tester_and_critic_cycle(tmp_path: Path
         debugger_calls=debugger_calls,
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.stop_reason == "dual_review_pass"
     assert report.attempt_count == 2
@@ -345,7 +379,7 @@ def test_verifier_refresh_rebinds_agents_to_repair_worktree(tmp_path: Path):
     )
     harness.runtime_rebinder = rebound_roots.append
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.stop_reason == "dual_review_pass"
     assert rebound_roots == [repair_worktree]
@@ -385,7 +419,7 @@ def test_live_scenario_repair_uses_exact_constraints_and_retests_repaired_worktr
     harness.scenario_evaluator = evaluate
     harness.repair_test_validator = lambda *_args: RepairTestEvidence(status="pass")
 
-    report = asyncio.run(harness.run(scenario.query, scenario=scenario))
+    report = asyncio.run(harness.repair_scenario(scenario))
 
     assert report.status == "pass"
     assert tester_calls[0].scenario_name == "volume"
@@ -418,7 +452,7 @@ def test_live_scenario_repair_blocks_after_failed_deterministic_test_evidence(tm
         issues=["changed production-file coverage decreased"],
     )
 
-    report = asyncio.run(harness.run(scenario.query, scenario=scenario))
+    report = asyncio.run(harness.repair_scenario(scenario))
 
     assert report.stop_reason == "repair_test_evidence_failed"
     assert verifier_calls[0].repair_test_evidence is not None
@@ -441,7 +475,7 @@ def test_live_scenario_uses_scoped_pass_when_tester_reports_blocked(tmp_path: Pa
         }
     )
 
-    report = asyncio.run(harness.run(scenario.query, scenario=scenario))
+    report = asyncio.run(harness.repair_scenario(scenario))
 
     assert report.status == "pass"
     assert report.latest_tester_report is not None
@@ -466,7 +500,7 @@ def test_accepted_patch_on_third_cycle_exhausts_validation_budget(tmp_path: Path
         ],
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "fail"
     assert report.stop_reason == "review_cycle_exhausted"
@@ -487,7 +521,7 @@ def test_critic_refresh_on_third_cycle_exhausts_validation_budget(tmp_path: Path
         debugger_calls=debugger_calls,
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "fail"
     assert report.stop_reason == "review_cycle_exhausted"
@@ -502,7 +536,7 @@ def test_orchestrator_stops_when_critic_is_blocked(tmp_path: Path):
         critic_results=[_critic_report("blocked", "missing evidence")],
     )
 
-    report = asyncio.run(harness.run("find oxides"))
+    report = asyncio.run(harness.repair_scenario(_scenario()))
 
     assert report.status == "blocked"
     assert report.stop_reason == "critic_blocked"
@@ -531,9 +565,9 @@ def test_orchestrator_stops_when_debugger_or_verifier_cannot_continue(tmp_path: 
         verifier_results=[_verifier_report("blocked", "cannot inspect patch")],
     )
 
-    blocked_report = asyncio.run(debugger_blocked.run("find oxides"))
-    failed_report = asyncio.run(verifier_failed.run("find oxides"))
-    verifier_blocked_report = asyncio.run(verifier_blocked.run("find oxides"))
+    blocked_report = asyncio.run(debugger_blocked.repair_scenario(_scenario()))
+    failed_report = asyncio.run(verifier_failed.repair_scenario(_scenario()))
+    verifier_blocked_report = asyncio.run(verifier_blocked.repair_scenario(_scenario()))
 
     assert blocked_report.stop_reason == "debugger_blocked"
     assert failed_report.stop_reason == "verifier_fail"
@@ -551,7 +585,7 @@ def test_orchestrator_contains_agent_execution_exception(tmp_path: Path):
     )
     harness.codex_debugger_runner = raise_max_turns
 
-    report = asyncio.run(harness.run("find formation energy"))
+    report = asyncio.run(harness.repair_scenario(_scenario("find formation energy")))
 
     assert report.status == "blocked"
     assert report.stop_reason == "debugger_blocked"

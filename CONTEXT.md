@@ -90,7 +90,7 @@ Expected behavior:
 - may open isolated git branches/worktrees for debugger changes
 - records non-secret run artifacts; removes clean temporary worktrees while retaining repair branches
 - re-runs accepted repair validation from the repair worktree source, not the parent checkout
-- supports one-scenario live repair with deterministic test and per-file coverage gates before publication
+- exposes fixed eight-scenario `validate` and `validate-repair` commands; repair binds each failed scenario internally and enforces deterministic test and per-file coverage gates before publication
 - runs from tooling branch `multi-agent` against detached product `main` worktrees; debugger may create only product-only `fix/<issue>` branches
 - after every repair gate passes, pushes via SSH, opens a ready PR to `main`, waits for CI on exact PR SHA, then requests squash merge through GitHub API; failures retain branch/artifacts without merge
 - should preserve the existing deterministic shortlist pipeline as source of truth

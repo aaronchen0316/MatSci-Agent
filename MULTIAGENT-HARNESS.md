@@ -59,7 +59,7 @@ Tester refresh feedback is typed and records whether it came from Critic or Fina
 
 The harness allows three total Tester/Critic review cycles. A requested refresh after cycle three ends with `review_cycle_exhausted`; an accepted patch never bypasses this limit.
 
-The harness runs from the tooling-only `multi-agent` branch, but evaluates a detached product worktree from current `origin/main`. `repair-live --scenario <name>` binds one live regression contract, creates only `fix/<issue>` worktrees from `origin/main`, and injects the exact query and constraints into every Tester cycle. Scoped evaluation imports product `src/` before tooling `src/`, so evidence always covers current `main` or the repaired product worktree.
+The harness has two commands. `validate` runs the fixed eight live regression scenarios from a detached product worktree at current `origin/main`. `validate-repair` validates first, gives each current failing scenario one 30-turn repair attempt, and validates all eight again after each merge and at the end. Each repair binds the exact scenario query, constraints, and assertions into every Tester cycle. Scoped evaluation imports product `src/` before tooling `src/`, so evidence always covers current `main` or the repaired product worktree.
 
 Production live repairs require deterministic test proof before Verifier acceptance can become useful:
 
@@ -72,12 +72,10 @@ Production live repairs require deterministic test proof before Verifier accepta
 ## Artifacts and Safety
 Each run writes non-secret typed inputs, reports, evaluator evidence, patch/commit evidence, and cleanup results under ignored `artifacts/multiagent-runs/<run-id>/`.
 
-Default mode is read-only and offline. Live MP evaluation and Git writes are independent opt-ins. Normal `run` never pushes, opens PRs, or merges; only fully passing live-repair paths can publish a product repair.
+`validate` is read-only. `validate-repair` requires `MULTIAGENT_ENABLE_LIVE_MP=1`, `MULTIAGENT_ENABLE_GIT_WRITE=1`, and a clean tooling checkout. It creates only product-only `fix/<issue>` branches from current `origin/main`; legacy branches have no runtime migration or publication path.
 
-`audit-repairs` is read-only. It retains every legacy branch and records branch namespace, ancestry from current `origin/main`, product-only diff, debugger/test/verifier/live evidence, evidence SHA match, and stored publication status. Rejected history is never migrated, pushed, or proposed as a PR.
-
-`repair-suite` first writes that audit, then runs all eight live scenarios from detached `origin/main`. It gives every currently failing scenario one fresh repair attempt. A successful repair must have a product-only `fix/<issue>` diff, committed debugger evidence, changed-test/full-suite/no-coverage-drop proof, Verifier acceptance, and a fresh scoped Tester/Critic/live pass. It then pushes through SSH, creates a ready PR to `main`, waits for GitHub Actions on the exact validated PR head SHA, and requests an exact-SHA squash merge. After a merge the harness fetches `origin/main` and reruns all eight scenarios before attempting the next remaining failure. Any failed, blocked, or timed-out gate retains its branch and artifacts without merging; the suite still processes other initial failures and always writes a final all-eight result.
+A successful repair must have a product-only diff, Debugger commit, changed-test/full-suite/no-coverage-drop proof, Verifier acceptance, and fresh scoped Tester/Critic/live pass. It then pushes through SSH, creates a ready PR to `main`, waits for GitHub Actions on the exact validated PR head SHA, and requests an exact-SHA squash merge. Any failed, blocked, or timed-out gate retains its branch and artifacts without merging.
 
 `gpt-5.4-mini` is always preflighted through the configured proxy before live work. Only an explicit unavailable-model error retries both harness and product calls with `gpt-5.5`; authentication, network, or proxy errors block the run. `GITHUB_TOKEN` is used only for GitHub API calls and needs Contents plus Pull requests read/write permission; SSH remains the push transport.
 
-Worktree tools require a registered Git worktree below the configured worktree root. File mutations reject traversal even when an input begins with an allowlisted prefix; structured pytest targets must resolve under `tests/`.
+Tester has only typed scoped evaluation. Critic has immutable evidence only. Debugger can inspect, edit, test, and commit only managed product/test Python files. Verifier can inspect only the managed repair patch and allowlisted files. Worktree tools require a registered Git worktree below the configured worktree root; paths and pytest targets reject traversal and injection.

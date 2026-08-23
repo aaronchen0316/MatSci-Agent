@@ -20,7 +20,7 @@ class MultiAgentSettings:
     product_model: str = "gpt-5.4-mini"
     api_key: str | None = None
     base_url: str | None = None
-    max_agent_turns: int = 20
+    max_agent_turns: int = 30
     disable_tracing: bool = True
     enable_live_mp: bool = False
     enable_git_write: bool = False
@@ -57,7 +57,7 @@ class MultiAgentSettings:
         root = Path(tool_root or Path(__file__).resolve().parents[2]).resolve()
         target_repo = Path(os.getenv("MULTIAGENT_TARGET_REPO", str(root))).expanduser().resolve()
         model = os.getenv("MULTIAGENT_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
-        max_agent_turns = max(1, int(os.getenv("MULTIAGENT_MAX_TURNS", "20")))
+        max_agent_turns = max(1, int(os.getenv("MULTIAGENT_MAX_TURNS", "30")))
         artifact_root = Path(os.getenv("MULTIAGENT_ARTIFACT_ROOT", "artifacts/multiagent-runs")).expanduser()
         if not artifact_root.is_absolute():
             artifact_root = root / artifact_root
