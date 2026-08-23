@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from matsci_agent.schemas import DiscoveryConstraints
 
@@ -19,20 +19,26 @@ FailureStage = Literal[
 ]
 
 HarnessStopReason = Literal[
-    "tester_pass",
+    "dual_review_pass",
     "tester_blocked",
     "critic_blocked",
+    "scientific_evidence_blocked",
     "debugger_blocked",
-    "verifier_pass",
     "verifier_fail",
     "verifier_blocked",
-    "verifier_refresh_exhausted",
+    "review_cycle_exhausted",
 ]
+
+
+class RefreshFeedback(BaseModel):
+    source: Literal["critic", "verifier"]
+    summary: str
+    findings: list[str] = Field(default_factory=list)
 
 
 class RetrievalTesterInput(BaseModel):
     objective: str
-    verifier_feedback: str | None = None
+    refresh_feedback: RefreshFeedback | None = None
     allow_live_mp: bool = False
 
 
@@ -63,6 +69,37 @@ class StageCounts(BaseModel):
     replenish_count: int = 0
 
 
+class CandidateReviewSnapshot(BaseModel):
+    """Bounded, chemistry-relevant candidate evidence for Critic review."""
+
+    material_id: str
+    formula: str
+    elements: list[str] = Field(default_factory=list)
+    mp_band_gap_ev: float | None = None
+    energy_above_hull: float | None = None
+    formation_energy: float | None = None
+    density: float | None = None
+    volume: float | None = None
+    num_sites: int | None = None
+    is_metal: bool | None = None
+    is_stable: bool | None = None
+    crystal_system: str | None = None
+    spacegroup_number: int | None = None
+    spacegroup_symbol: str | None = None
+    policy_passed: bool | None = None
+    policy_reasons: list[str] = Field(default_factory=list)
+    rank: int | None = None
+    score: float | None = None
+    predicted_band_gap_ev: float | None = None
+    stability_energy_above_hull: float | None = None
+
+
+class CandidateReviewSnapshots(BaseModel):
+    raw: list[CandidateReviewSnapshot] = Field(default_factory=list, max_length=20)
+    filtered: list[CandidateReviewSnapshot] = Field(default_factory=list, max_length=20)
+    ranked: list[CandidateReviewSnapshot] = Field(default_factory=list)
+
+
 class CompiledFilterEvidence(BaseModel):
     effective_filters: dict[str, Any] = Field(default_factory=dict)
     mp_search_kwargs: dict[str, Any] = Field(default_factory=dict)
@@ -79,6 +116,7 @@ class LiveEvalEvidence(BaseModel):
     constraint_violations: ConstraintViolationSummary = Field(default_factory=ConstraintViolationSummary)
     messages: list[str] = Field(default_factory=list)
     provenance_summary: dict[str, Any] = Field(default_factory=dict)
+    candidate_snapshots: CandidateReviewSnapshots = Field(default_factory=CandidateReviewSnapshots)
     real_source_used: bool = False
     blocked_reason: str | None = None
 
@@ -88,23 +126,75 @@ class RetrievalTesterReport(BaseModel):
     failed_stage: FailureStage | None = None
     summary: str
     evidence: dict[str, Any] = Field(default_factory=dict)
+    live_evaluation: LiveEvalEvidence | None = None
     recommended_debug_focus: list[str] = Field(default_factory=list)
     offline_commands: list[str] = Field(default_factory=list)
     live_commands: list[str] = Field(default_factory=list)
 
 
 class MaterialsQueryCriticInput(BaseModel):
+    objective: str
     tester_report: RetrievalTesterReport
+    review_evidence: LiveEvalEvidence | None = None
 
 
 class MaterialsQueryCriticReport(BaseModel):
-    status: Literal["ready", "blocked"] = "ready"
-    root_cause: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    verdict: Literal["agree", "disagree", "blocked"]
+    summary: str
+    material_findings: list[str] = Field(default_factory=list)
     owning_modules: list[str] = Field(default_factory=list)
     recommended_fix_order: list[str] = Field(default_factory=list)
     notes_for_debugger: list[str] = Field(default_factory=list)
+    informational_notes: list[str] = Field(default_factory=list)
     blocked_reason: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_agreement_notes(cls, value: object) -> object:
+        """Normalize internally contradictory Critic verdicts before validation."""
+
+        if not isinstance(value, dict) or value.get("verdict") != "agree":
+            return value
+        extra_notes = [
+            *(value.get("material_findings") or []),
+            *(value.get("notes_for_debugger") or []),
+            *(value.get("recommended_fix_order") or []),
+        ]
+        if not extra_notes and not value.get("owning_modules"):
+            return value
+        normalized = dict(value)
+        module_notes = [f"Critic referenced module: {module}" for module in (value.get("owning_modules") or [])]
+        normalized["material_findings"] = []
+        normalized["owning_modules"] = []
+        normalized["recommended_fix_order"] = []
+        normalized["notes_for_debugger"] = []
+        normalized["informational_notes"] = [
+            *(normalized.get("informational_notes") or []),
+            *extra_notes,
+            *module_notes,
+        ]
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_verdict_fields(self) -> "MaterialsQueryCriticReport":
+        if self.verdict == "agree":
+            if self.material_findings:
+                raise ValueError("agree verdict must not include material findings")
+            if self.owning_modules or self.recommended_fix_order or self.notes_for_debugger:
+                raise ValueError("agree verdict must not include repair guidance")
+            if self.blocked_reason is not None:
+                raise ValueError("agree verdict must not include blocked_reason")
+        elif self.verdict == "disagree":
+            if not self.material_findings:
+                raise ValueError("disagree verdict requires material findings")
+            if self.blocked_reason is not None:
+                raise ValueError("disagree verdict must not include blocked_reason")
+        else:
+            if not self.blocked_reason:
+                raise ValueError("blocked verdict requires blocked_reason")
+            if self.material_findings or self.owning_modules or self.recommended_fix_order or self.notes_for_debugger:
+                raise ValueError("blocked verdict must not include findings or repair guidance")
+        return self
 
 
 class CodexDebuggerInput(BaseModel):
@@ -133,18 +223,26 @@ class FinalVerifierInput(BaseModel):
 
 
 class FinalVerifierReport(BaseModel):
-    status: Literal["pass", "fail", "needs_tester_refresh", "blocked"]
+    status: Literal["accepted", "fail", "needs_tester_refresh", "blocked"]
     summary: str
     requires_tester_refresh: bool = False
     tester_refresh_reason: str | None = None
     review_notes: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_refresh_requirement(self) -> "FinalVerifierReport":
+        refresh_required = self.status in {"accepted", "needs_tester_refresh"}
+        if self.requires_tester_refresh != refresh_required:
+            raise ValueError("requires_tester_refresh must match verifier status")
+        return self
+
 
 class HarnessAttemptRecord(BaseModel):
     attempt_number: int = Field(ge=1)
     branch_name: str | None = None
     worktree_path: str | None = None
+    refresh_feedback: RefreshFeedback | None = None
     tester_report: RetrievalTesterReport
     critic_report: MaterialsQueryCriticReport | None = None
     debugger_report: CodexDebuggerReport | None = None

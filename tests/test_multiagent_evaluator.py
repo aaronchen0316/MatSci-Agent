@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from matsci_agent.multiagent.evaluator import LiveRetrievalEvaluator
 from matsci_agent.multiagent.schemas import LiveEvalInput, RetrievalTesterReport
-from matsci_agent.schemas import Candidate, DiscoveryConstraints, DiscoveryFullResponse, MPFilters, PredictedProperties, RankedCandidate, StabilityResult, ToolCallProvenance
+from matsci_agent.schemas import (
+    Candidate,
+    DiscoveryConstraints,
+    DiscoveryFullResponse,
+    MPFilters,
+    PolicyFilterRecord,
+    PredictedProperties,
+    RankedCandidate,
+    StabilityResult,
+    ToolCallProvenance,
+)
 
 
 class FakeWorkflow:
@@ -75,6 +85,7 @@ def _response(
     raw_candidates: list[Candidate] | None = None,
     filtered_candidates: list[Candidate] | None = None,
     ranked_candidates: list[RankedCandidate] | None = None,
+    filter_records: list[PolicyFilterRecord] | None = None,
     provenance: list[ToolCallProvenance] | None = None,
     status: str = "success",
     messages: list[str] | None = None,
@@ -86,6 +97,7 @@ def _response(
         iterations=1,
         raw_candidates=raw_candidates or [],
         filtered_candidates=filtered_candidates or [],
+        filter_records=filter_records or [],
         candidates=ranked_candidates or [],
         provenance=provenance or [],
         messages=messages or [],
@@ -168,6 +180,62 @@ def test_live_evaluator_extracts_compiled_filters_and_counts(monkeypatch):
     assert evidence.result_counts.raw_count == 1
     assert evidence.result_counts.filtered_count == 1
     assert evidence.result_counts.ranked_count == 1
+
+
+def test_live_evaluator_builds_bounded_whitelisted_candidate_snapshots(monkeypatch):
+    monkeypatch.setenv("MP_API_KEY", "token")
+    candidates = [
+        _candidate(
+            f"mp-{index}",
+            "TiO2",
+            elements=["Ti", "O"],
+            mp_band_gap_ev=3.0,
+            mp_energy_above_hull=0.01,
+            formation_energy=-2.4,
+            density=4.2,
+            volume=62.0,
+            nsites=6,
+            crystal_system="tetragonal",
+            spacegroup_number=136,
+            spacegroup_symbol="P4_2/mnm",
+            structure={"should_not": "reach critic"},
+            arbitrary_payload="do not copy",
+        )
+        for index in range(25)
+    ]
+    response = _response(
+        raw_candidates=candidates,
+        filtered_candidates=candidates,
+        ranked_candidates=[_ranked(candidate) for candidate in candidates[:3]],
+        filter_records=[
+            PolicyFilterRecord(
+                candidate=candidates[0],
+                passed=False,
+                reasons=["outside requested material family"],
+                policy="chemistry_screening",
+            )
+        ],
+        provenance=[
+            _retriever_provenance(
+                source="materials_project",
+                candidate_count=25,
+                search_kwargs=_default_search_kwargs(),
+            )
+        ],
+    )
+    evaluator = LiveRetrievalEvaluator(workflow_factory=lambda: FakeWorkflow(response))
+
+    evidence = evaluator.evaluate(LiveEvalInput(query="find oxides", allow_live_mp=True))
+
+    snapshots = evidence.candidate_snapshots
+    assert len(snapshots.raw) == 20
+    assert len(snapshots.filtered) == 20
+    assert len(snapshots.ranked) == 3
+    assert snapshots.raw[0].policy_passed is False
+    assert snapshots.raw[0].policy_reasons == ["outside requested material family"]
+    assert snapshots.raw[0].elements == ["O", "Ti"]
+    assert "structure" not in snapshots.raw[0].model_dump()
+    assert "arbitrary_payload" not in snapshots.raw[0].model_dump()
 
 
 def test_live_evaluator_maps_search_space_failure(monkeypatch):

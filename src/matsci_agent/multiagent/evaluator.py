@@ -9,6 +9,8 @@ from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
 from matsci_agent.workflow.graph import DiscoveryWorkflow
 
 from matsci_agent.multiagent.schemas import (
+    CandidateReviewSnapshot,
+    CandidateReviewSnapshots,
     CompiledFilterEvidence,
     ConstraintViolationRecord,
     ConstraintViolationSummary,
@@ -88,6 +90,7 @@ class LiveRetrievalEvaluator:
             filtered=self._violation_records(response.filtered_candidates, "filtered", query, response),
             ranked=self._violation_records([ranked.candidate for ranked in response.candidates], "ranked", query, response),
         )
+        snapshots = self._candidate_snapshots(response)
 
         retriever_provenance = self._latest_provenance(response, "mp_retriever")
         retriever_source = None
@@ -105,6 +108,7 @@ class LiveRetrievalEvaluator:
                 constraint_violations=violations,
                 messages=list(response.messages),
                 provenance_summary=self._provenance_summary(response),
+                candidate_snapshots=snapshots,
                 blocked_reason="mock fallback used instead of live MP evidence",
             )
 
@@ -117,6 +121,7 @@ class LiveRetrievalEvaluator:
                 constraint_violations=violations,
                 messages=list(response.messages),
                 provenance_summary=self._provenance_summary(response),
+                candidate_snapshots=snapshots,
                 blocked_reason="live MP request unavailable",
             )
 
@@ -131,7 +136,72 @@ class LiveRetrievalEvaluator:
             constraint_violations=violations,
             messages=list(response.messages),
             provenance_summary=self._provenance_summary(response),
+            candidate_snapshots=snapshots,
             real_source_used=retriever_source == "materials_project",
+        )
+
+    def _candidate_snapshots(self, response: DiscoveryFullResponse) -> CandidateReviewSnapshots:
+        """Keep Critic evidence compact and limited to review-relevant MP fields."""
+
+        records = {record.candidate.material_id: record for record in response.filter_records}
+        return CandidateReviewSnapshots(
+            raw=[self._candidate_snapshot(candidate, records.get(candidate.material_id)) for candidate in response.raw_candidates[:20]],
+            filtered=[
+                self._candidate_snapshot(candidate, records.get(candidate.material_id))
+                for candidate in response.filtered_candidates[:20]
+            ],
+            ranked=[
+                self._candidate_snapshot(
+                    ranked.candidate,
+                    records.get(ranked.candidate.material_id),
+                    rank=ranked.rank,
+                    score=ranked.score,
+                    predicted_band_gap_ev=ranked.predicted_properties.band_gap_ev,
+                    stability_energy_above_hull=ranked.stability.energy_above_hull,
+                    is_stable=ranked.stability.is_stable,
+                )
+                for ranked in response.candidates
+            ],
+        )
+
+    def _candidate_snapshot(
+        self,
+        candidate: Candidate,
+        policy_record,
+        *,
+        rank: int | None = None,
+        score: float | None = None,
+        predicted_band_gap_ev: float | None = None,
+        stability_energy_above_hull: float | None = None,
+        is_stable: bool | None = None,
+    ) -> CandidateReviewSnapshot:
+        assert self.retriever is not None
+        features = candidate.features
+        raw_elements = features.get("elements")
+        elements = sorted(str(element) for element in raw_elements) if isinstance(raw_elements, list) else sorted(
+            self.retriever._extract_elements(candidate.formula)
+        )
+        return CandidateReviewSnapshot(
+            material_id=candidate.material_id,
+            formula=candidate.formula,
+            elements=elements,
+            mp_band_gap_ev=features.get("mp_band_gap_ev"),
+            energy_above_hull=features.get("mp_energy_above_hull"),
+            formation_energy=features.get("formation_energy"),
+            density=features.get("density"),
+            volume=features.get("volume"),
+            num_sites=features.get("nsites"),
+            is_metal=features.get("is_metal"),
+            is_stable=is_stable if is_stable is not None else features.get("is_stable"),
+            crystal_system=features.get("crystal_system"),
+            spacegroup_number=features.get("spacegroup_number"),
+            spacegroup_symbol=features.get("spacegroup_symbol"),
+            policy_passed=policy_record.passed if policy_record is not None else None,
+            policy_reasons=list(policy_record.reasons) if policy_record is not None else [],
+            rank=rank,
+            score=score,
+            predicted_band_gap_ev=predicted_band_gap_ev,
+            stability_energy_above_hull=stability_energy_above_hull,
         )
 
     def _compiled_filters(self, query: str, response: DiscoveryFullResponse) -> CompiledFilterEvidence:

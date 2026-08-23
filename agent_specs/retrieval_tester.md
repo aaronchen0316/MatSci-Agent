@@ -40,6 +40,8 @@ Use only:
 - use live MP eval only when harness says enabled
 - use evaluator-tool evidence instead of freehand live reasoning when live MP is enabled
 - if evaluator returns `blocked`, report blocked state clearly instead of pretending live evidence exists
+- attach the evaluator response unchanged in `live_evaluation`; do not summarize it into the untyped `evidence` map
+- report `pass` only when the attached live evaluation has real Materials Project provenance and candidate snapshots
 - tie every failure to evidence
 - separate “zero results” from “wrong results”
 - separate deterministic constraint failure from LLM policy failure
@@ -50,6 +52,7 @@ Return JSON-shaped reasoning matching harness schema:
 - `failed_stage`
 - `summary`
 - `evidence`
+- `live_evaluation`
 - `recommended_debug_focus`
 - `offline_commands`
 - `live_commands`

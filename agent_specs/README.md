@@ -15,13 +15,13 @@ Python-owned orchestration:
   - grades retrieval quality from offline traces first
   - may run live MP evals only when explicitly enabled
 - Materials Query Critic Agent
-  - maps failure -> root cause -> owning module
+  - independently approves or disputes Tester conclusions from immutable evidence
 - Codex Debugger Agent
   - patches code in isolated worktree branch
   - can commit only when mutation mode is enabled
 - Final Verifier Agent
-  - reviews debugger output
-  - decides pass / fail / needs tester update
+  - accepts or rejects debugger patch quality
+  - never declares final harness success
 
 ## Key design rules
 
@@ -30,7 +30,8 @@ Python-owned orchestration:
 3. Give agents narrow tools, not generic unrestricted shell.
 4. Default to offline evals and read-only git behavior.
 5. Use one shared model client for all sub-agents.
-6. Final Verifier is final review gate; no Controller Agent exists.
+6. Python emits `dual_review_pass` only after Tester pass, Critic agreement, and real MP evidence.
+7. Final Verifier is a patch-acceptance gate; no Controller Agent exists.
 
 ## API key / proxy answer
 
@@ -50,6 +51,7 @@ Recommended env:
 - `MULTIAGENT_API_KEY`
 - `MULTIAGENT_BASE_URL`
 - `MULTIAGENT_MODEL=gpt-5.4-mini`
+- `MULTIAGENT_MAX_TURNS=20`
 
 Tracing note:
 - if you use non-OpenAI proxy key, disable tracing by default
@@ -70,6 +72,7 @@ Enable only when ready:
 - `MULTIAGENT_ENABLE_LIVE_MP=1`
 - `MULTIAGENT_ENABLE_GIT_WRITE=1`
 - `MULTIAGENT_ARTIFACT_ROOT=artifacts/multiagent-runs`
+- `MULTIAGENT_REPAIR_BRANCH_PREFIX=retrieval-fix`
 
 ## Install
 

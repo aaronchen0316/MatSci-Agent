@@ -30,11 +30,13 @@ Implementation shape:
 3. Use the OpenAI Agents SDK with one shared model/client configuration.
 4. Default model: `gpt-5.4-mini`.
 5. Make Python orchestrator own retry order and stop conditions: tester -> critic -> debugger -> verifier.
-6. Do not create a Controller Agent. The Final Verifier is final review gate; Python remains sole scheduler.
-7. Keep git mutation disabled by default behind an explicit env flag. The harness never pushes or opens PRs.
-8. Prefer isolated worktree branches for debugger changes, reuse one repair branch across retries, then remove clean worktrees while retaining branches.
-9. Record non-secret run artifacts and typed agent handoffs under ignored local storage.
-10. Preserve the current deterministic `DiscoveryWorkflow` as execution source of truth.
+6. Do not create a Controller Agent. Python remains sole scheduler and emits final success only after Tester pass, Critic agreement, and real MP evidence.
+7. Treat Final Verifier as a patch-acceptance gate. Its accepted patches require a fresh Tester + Critic cycle and cannot directly pass the harness.
+8. Keep git mutation disabled by default behind an explicit env flag. The harness never pushes or opens PRs.
+9. Prefer isolated worktree branches for debugger changes, reuse one repair branch across retries, then remove clean worktrees while retaining branches.
+10. Record non-secret run artifacts and typed agent handoffs under ignored local storage.
+11. Preserve the current deterministic `DiscoveryWorkflow` as execution source of truth.
+12. Rebind Tester and Critic tools to an accepted repair worktree; execute live evaluation in a subprocess importing that worktree's source tree.
 
 ## Consequences
 ### Positive

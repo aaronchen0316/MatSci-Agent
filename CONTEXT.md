@@ -82,11 +82,14 @@ An external multi-agent supervision layer for evaluating and improving retrieval
 Expected behavior:
 - runs outside `DiscoveryWorkflow`
 - Python assigns specialist work in fixed order: Retrieval Tester -> Materials Query Critic -> Codex Debugger -> Final Verifier
-- Final Verifier is the final repair gate; there is no Controller Agent
+- Dual Review is final scientific success gate: Retrieval Tester pass plus Materials Query Critic agreement over real MP evidence
+- Final Verifier is patch-acceptance gate; accepted patches always receive a fresh Tester + Critic cycle
+- no Controller Agent exists; Python owns scheduling, retry budget, and terminal state
 - uses `POST /discover/full` or equivalent local trace surface as evidence
 - treats retrieval quality as staged failures such as intent parse, Search Space Expansion, retrieval, Policy Filter, and final ranking
 - may open isolated git branches/worktrees for debugger changes
 - records non-secret run artifacts; removes clean temporary worktrees while retaining repair branches
+- re-runs accepted repair validation from the repair worktree source, not the parent checkout
 - should preserve the existing deterministic shortlist pipeline as source of truth
 
 ### Task Registry

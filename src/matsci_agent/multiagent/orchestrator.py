@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from matsci_agent.multiagent.artifacts import HarnessArtifactStore
@@ -16,6 +17,7 @@ from matsci_agent.multiagent.schemas import (
     HarnessStopReason,
     MaterialsQueryCriticInput,
     MaterialsQueryCriticReport,
+    RefreshFeedback,
     RetrievalTesterInput,
     RetrievalTesterReport,
 )
@@ -23,7 +25,7 @@ from matsci_agent.multiagent.sdk import configure_sdk
 from matsci_agent.multiagent.settings import MultiAgentSettings
 from matsci_agent.multiagent.tools import build_tool_groups, cleanup_worktree, worktree_evidence
 
-_MAX_REPAIR_ATTEMPTS = 3
+_MAX_REVIEW_CYCLES = 3
 
 
 @dataclass
@@ -35,6 +37,7 @@ class MultiAgentHarness:
     materials_query_critic_runner: Callable[[MaterialsQueryCriticInput], Awaitable[MaterialsQueryCriticReport]]
     codex_debugger_runner: Callable[[CodexDebuggerInput], Awaitable[CodexDebuggerReport]]
     final_verifier_runner: Callable[[FinalVerifierInput], Awaitable[FinalVerifierReport]]
+    runtime_rebinder: Callable[[Path], None] | None = None
 
     @classmethod
     def build(cls, settings: MultiAgentSettings | None = None) -> "MultiAgentHarness":
@@ -43,24 +46,41 @@ class MultiAgentHarness:
         tool_groups = build_tool_groups(sdk, runtime)
         registry = build_agent_registry(sdk, runtime, tool_groups)
         runner = sdk.Runner
+        registry_holder = {"value": registry}
 
         async def run_retrieval_tester(payload: RetrievalTesterInput) -> RetrievalTesterReport:
-            result = await runner.run(registry.retrieval_tester, payload.model_dump_json(indent=2))
+            result = await runner.run(
+                registry_holder["value"].retrieval_tester,
+                payload.model_dump_json(indent=2),
+                max_turns=runtime.max_agent_turns,
+            )
             return RetrievalTesterReport.model_validate(result.final_output.model_dump(mode="json"))
 
         async def run_materials_query_critic(payload: MaterialsQueryCriticInput) -> MaterialsQueryCriticReport:
-            result = await runner.run(registry.materials_query_critic, payload.model_dump_json(indent=2))
+            result = await runner.run(
+                registry_holder["value"].materials_query_critic,
+                payload.model_dump_json(indent=2),
+                max_turns=runtime.max_agent_turns,
+            )
             return MaterialsQueryCriticReport.model_validate(result.final_output.model_dump(mode="json"))
 
         async def run_codex_debugger(payload: CodexDebuggerInput) -> CodexDebuggerReport:
-            result = await runner.run(registry.codex_debugger, payload.model_dump_json(indent=2))
+            result = await runner.run(
+                registry_holder["value"].codex_debugger,
+                payload.model_dump_json(indent=2),
+                max_turns=runtime.max_agent_turns,
+            )
             return CodexDebuggerReport.model_validate(result.final_output.model_dump(mode="json"))
 
         async def run_final_verifier(payload: FinalVerifierInput) -> FinalVerifierReport:
-            result = await runner.run(registry.final_verifier, payload.model_dump_json(indent=2))
+            result = await runner.run(
+                registry_holder["value"].final_verifier,
+                payload.model_dump_json(indent=2),
+                max_turns=runtime.max_agent_turns,
+            )
             return FinalVerifierReport.model_validate(result.final_output.model_dump(mode="json"))
 
-        return cls(
+        harness = cls(
             settings=runtime,
             sdk=sdk,
             registry=registry,
@@ -70,10 +90,20 @@ class MultiAgentHarness:
             final_verifier_runner=run_final_verifier,
         )
 
+        def rebind_runtime(repo_root: Path) -> None:
+            scoped_settings = replace(runtime, repo_root=repo_root.resolve())
+            scoped_tools = build_tool_groups(sdk, scoped_settings)
+            scoped_registry = build_agent_registry(sdk, scoped_settings, scoped_tools)
+            registry_holder["value"] = scoped_registry
+            harness.registry = scoped_registry
+
+        harness.runtime_rebinder = rebind_runtime
+        return harness
+
     async def run(self, objective: str) -> HarnessRunReport:
         store = HarnessArtifactStore.create(self.settings, objective)
         attempts: list[HarnessAttemptRecord] = []
-        verifier_feedback: str | None = None
+        refresh_feedback: RefreshFeedback | None = None
         branch_name: str | None = None
         worktree_path: str | None = None
         latest_tester: RetrievalTesterReport | None = None
@@ -115,10 +145,10 @@ class MultiAgentHarness:
             store.write_model("harness_run_report.json", report)
             return report
 
-        for attempt_number in range(1, _MAX_REPAIR_ATTEMPTS + 1):
+        for attempt_number in range(1, _MAX_REVIEW_CYCLES + 1):
             tester_input = RetrievalTesterInput(
                 objective=objective,
-                verifier_feedback=verifier_feedback,
+                refresh_feedback=refresh_feedback,
                 allow_live_mp=self.settings.enable_live_mp,
             )
             store.write_model(f"attempts/{attempt_number}/retrieval_tester_input.json", tester_input)
@@ -129,18 +159,10 @@ class MultiAgentHarness:
                 attempt_number=attempt_number,
                 branch_name=branch_name,
                 worktree_path=worktree_path,
+                refresh_feedback=refresh_feedback,
                 tester_report=tester_report,
             )
 
-            if tester_report.status == "pass":
-                attempt.stop_reason_fragment = "tester_pass"
-                attempts.append(attempt)
-                return finish(
-                    status="pass",
-                    stop_reason="tester_pass",
-                    summary="Retrieval tester passed; no repair loop needed.",
-                    next_step="Review evaluator evidence or continue with broader eval coverage.",
-                )
             if tester_report.status == "blocked":
                 attempt.stop_reason_fragment = "tester_blocked"
                 attempts.append(attempt)
@@ -151,26 +173,68 @@ class MultiAgentHarness:
                     next_step="Enable missing live-eval or repo prerequisites, then rerun harness.",
                 )
 
-            critic_input = MaterialsQueryCriticInput(tester_report=tester_report)
+            critic_input = MaterialsQueryCriticInput(
+                objective=objective,
+                tester_report=tester_report,
+                review_evidence=tester_report.live_evaluation,
+            )
             store.write_model(f"attempts/{attempt_number}/materials_query_critic_input.json", critic_input)
             critic_report = await self.materials_query_critic_runner(critic_input)
             store.write_model(f"attempts/{attempt_number}/materials_query_critic_report.json", critic_report)
             latest_critic = critic_report
             attempt.critic_report = critic_report
-            if critic_report.status == "blocked":
+            if critic_report.verdict == "blocked":
                 attempt.stop_reason_fragment = "critic_blocked"
                 attempts.append(attempt)
                 return finish(
                     status="blocked",
                     stop_reason="critic_blocked",
-                    summary="Materials Query Critic blocked; no safe root-cause diagnosis available.",
+                    summary="Materials Query Critic blocked; no safe independent review is available.",
                     next_step=critic_report.blocked_reason or "Unblock critic inputs, then rerun harness.",
                 )
+
+            if tester_report.status == "pass" and critic_report.verdict == "agree":
+                if self._has_real_approval_evidence(tester_report):
+                    attempt.stop_reason_fragment = "dual_review_pass"
+                    attempts.append(attempt)
+                    return finish(
+                        status="pass",
+                        stop_reason="dual_review_pass",
+                        summary="Retrieval Tester and Materials Query Critic approved real Materials Project evidence.",
+                        next_step="Review evaluator evidence or continue with broader eval coverage.",
+                    )
+                attempt.stop_reason_fragment = "scientific_evidence_blocked"
+                attempts.append(attempt)
+                return finish(
+                    status="blocked",
+                    stop_reason="scientific_evidence_blocked",
+                    summary="Dual review could not certify a pass without real Materials Project candidate evidence.",
+                    next_step="Enable live MP evaluation and attach its typed evaluator output to the tester report.",
+                )
+
+            if tester_report.status == "fail" and critic_report.verdict == "disagree":
+                if attempt_number >= _MAX_REVIEW_CYCLES:
+                    attempt.stop_reason_fragment = "review_cycle_exhausted"
+                    attempts.append(attempt)
+                    return finish(
+                        status="fail",
+                        stop_reason="review_cycle_exhausted",
+                        summary="Critic requested a tester refresh, but the three-cycle review budget was exhausted.",
+                        next_step="Inspect the reviewer disagreement and rerun if another evaluation cycle is justified.",
+                    )
+                attempt.stop_reason_fragment = "critic_disagreement_refresh"
+                attempts.append(attempt)
+                refresh_feedback = RefreshFeedback(
+                    source="critic",
+                    summary=critic_report.summary,
+                    findings=critic_report.material_findings,
+                )
+                continue
 
             debugger_input = CodexDebuggerInput(
                 tester_report=tester_report,
                 critic_report=critic_report,
-                target_branch_prefix="retrieval-fix",
+                target_branch_prefix=self.settings.repair_branch_prefix,
                 existing_branch_name=branch_name,
                 existing_worktree_path=worktree_path,
             )
@@ -205,15 +269,6 @@ class MultiAgentHarness:
             latest_verifier = verifier_report
             attempt.verifier_report = verifier_report
 
-            if verifier_report.status == "pass":
-                attempt.stop_reason_fragment = "verifier_pass"
-                attempts.append(attempt)
-                return finish(
-                    status="pass",
-                    stop_reason="verifier_pass",
-                    summary="Verifier accepted repair loop outcome.",
-                    next_step="Review retained branch and artifacts, then merge when ready.",
-                )
             if verifier_report.status == "blocked":
                 attempt.stop_reason_fragment = "verifier_blocked"
                 attempts.append(attempt)
@@ -232,25 +287,41 @@ class MultiAgentHarness:
                     summary="Verifier rejected repair loop outcome.",
                     next_step="Inspect retained branch and verifier review notes.",
                 )
-            if attempt_number >= _MAX_REPAIR_ATTEMPTS:
-                attempt.stop_reason_fragment = "verifier_refresh_exhausted"
+            if attempt_number >= _MAX_REVIEW_CYCLES:
+                attempt.stop_reason_fragment = "review_cycle_exhausted"
                 attempts.append(attempt)
                 return finish(
                     status="fail",
-                    stop_reason="verifier_refresh_exhausted",
-                    summary="Verifier requested tester refresh, but retry budget was exhausted.",
-                    next_step="Inspect attempt history and rerun harness if more repair rounds are justified.",
+                    stop_reason="review_cycle_exhausted",
+                    summary="Patch review required a fresh tester and critic cycle, but the review budget was exhausted.",
+                    next_step="Inspect attempt history and rerun harness if another repair cycle is justified.",
                 )
-            attempt.stop_reason_fragment = "needs_tester_refresh"
+            attempt.stop_reason_fragment = (
+                "verifier_accepted_refresh" if verifier_report.status == "accepted" else "needs_tester_refresh"
+            )
             attempts.append(attempt)
-            verifier_feedback = verifier_report.tester_refresh_reason or verifier_report.summary
+            refresh_feedback = RefreshFeedback(
+                source="verifier",
+                summary=verifier_report.tester_refresh_reason or verifier_report.summary,
+                findings=list(verifier_report.review_notes),
+            )
+            if worktree_path and self.runtime_rebinder is not None:
+                self.runtime_rebinder(Path(worktree_path))
 
         return finish(
             status="fail",
-            stop_reason="verifier_refresh_exhausted",
-            summary="Repair loop exhausted retry budget.",
+            stop_reason="review_cycle_exhausted",
+            summary="Review loop exhausted retry budget.",
             next_step="Inspect attempt history and rerun harness if needed.",
         )
+
+    @staticmethod
+    def _has_real_approval_evidence(tester_report: RetrievalTesterReport) -> bool:
+        evidence = tester_report.live_evaluation
+        if evidence is None or evidence.status != "pass" or not evidence.real_source_used:
+            return False
+        snapshots = evidence.candidate_snapshots
+        return bool(snapshots.raw and snapshots.filtered and snapshots.ranked)
 
     @staticmethod
     def _finalize_run_report(
