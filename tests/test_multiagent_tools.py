@@ -41,6 +41,7 @@ def _make_repo(tmp_path: Path) -> Path:
     _run(["git", "config", "user.email", "test@example.com"], cwd=repo)
     _run(["git", "add", "-A"], cwd=repo)
     _run(["git", "commit", "-m", "init"], cwd=repo)
+    _run(["git", "update-ref", "refs/remotes/origin/multi-agent", "HEAD"], cwd=repo)
     return repo
 
 
@@ -346,6 +347,7 @@ def test_target_base_worktree_comes_from_configured_product_branch(tmp_path: Pat
     _run(["git", "checkout", "main"], repo)
     Path(repo, "src/matsci_agent/module.py").write_text("VALUE = 3\n")
     _run(["git", "commit", "-am", "main value"], repo)
+    _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], repo)
     _run(["git", "checkout", "multi-agent"], repo)
     settings = _settings(repo, tmp_path)
     settings = MultiAgentSettings(

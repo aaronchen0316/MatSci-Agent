@@ -48,16 +48,9 @@ def _github_repository(target_repo: Path) -> str:
 def _ensure_clean_tooling(settings: MultiAgentSettings) -> str | None:
     if _output(_run(["git", "status", "--porcelain"], settings.resolved_tool_root)):
         return "tooling checkout must be clean before publication"
-    base = _run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{settings.target_base_branch}"],
-        settings.resolved_target_repo,
-    )
-    if base.returncode != 0:
-        return f"target base branch does not exist: {settings.target_base_branch}"
-    local = _run(["git", "rev-parse", settings.target_base_branch], settings.resolved_target_repo)
-    remote = _run(["git", "rev-parse", f"origin/{settings.target_base_branch}"], settings.resolved_target_repo)
-    if local.returncode != 0 or remote.returncode != 0 or local.stdout.strip() != remote.stdout.strip():
-        return f"target base branch must match origin/{settings.target_base_branch} before publication"
+    base = _run(["git", "rev-parse", "--verify", settings.target_base_ref], settings.resolved_target_repo)
+    if base.returncode != 0 or not base.stdout.strip():
+        return f"target base ref does not exist: {settings.target_base_ref}"
     return None
 
 
@@ -75,7 +68,12 @@ def _run_branch_suite(settings: MultiAgentSettings, branch_name: str) -> tuple[b
         _run(["git", "worktree", "remove", "--force", str(worktree)], settings.resolved_target_repo)
 
 
-def _load_production_artifact(artifact_dir: Path, branch_name: str) -> str | None:
+def _load_production_artifact(
+    artifact_dir: Path,
+    branch_name: str,
+    *,
+    expected_head_sha: str | None = None,
+) -> str | None:
     report_path = artifact_dir / "harness_run_report.json"
     if not report_path.is_file():
         return "artifact directory does not contain harness_run_report.json"
@@ -89,6 +87,8 @@ def _load_production_artifact(artifact_dir: Path, branch_name: str) -> str | Non
         return "harness artifact branch does not match requested branch"
     if report.latest_debugger_report is None or report.latest_debugger_report.status != "patched":
         return "harness artifact lacks a committed debugger repair"
+    if expected_head_sha and report.latest_debugger_report.commit_sha != expected_head_sha:
+        return "harness debugger commit SHA does not match repair branch head"
     if report.latest_verifier_report is None or report.latest_verifier_report.status != "accepted":
         return "harness artifact lacks accepted verifier evidence"
     if report.latest_repair_test_evidence is None or report.latest_repair_test_evidence.status != "pass":
@@ -101,7 +101,7 @@ def _load_production_artifact(artifact_dir: Path, branch_name: str) -> str | Non
 
 def _product_only_diff(settings: MultiAgentSettings, branch_name: str) -> str | None:
     result = _run(
-        ["git", "diff", "--name-only", f"{settings.target_base_branch}...{branch_name}"],
+        ["git", "diff", "--name-only", f"{settings.target_base_ref}...{branch_name}"],
         settings.resolved_target_repo,
     )
     if result.returncode != 0:
@@ -210,15 +210,16 @@ def publish_and_merge_repair(
     clean_error = _ensure_clean_tooling(settings)
     if clean_error:
         return PullRequestPublication(status="blocked", branch_name=branch_name, base_branch=base_branch, summary=clean_error)
-    branch = _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"], settings.resolved_target_repo)
-    if branch.returncode != 0:
+    branch = _run(["git", "rev-parse", "--verify", branch_name], settings.resolved_target_repo)
+    branch_head_sha = branch.stdout.strip()
+    if branch.returncode != 0 or not branch_head_sha:
         return PullRequestPublication(status="blocked", branch_name=branch_name, base_branch=base_branch, summary="repair branch does not exist")
-    artifact_error = _load_production_artifact(artifact_dir.resolve(), branch_name)
+    artifact_error = _load_production_artifact(artifact_dir.resolve(), branch_name, expected_head_sha=branch_head_sha)
     if artifact_error:
         return PullRequestPublication(
             status="blocked", branch_name=branch_name, base_branch=base_branch, artifact_dir=str(artifact_dir), summary=artifact_error
         )
-    ancestor = _run(["git", "merge-base", "--is-ancestor", base_branch, branch_name], settings.resolved_target_repo)
+    ancestor = _run(["git", "merge-base", "--is-ancestor", settings.target_base_ref, branch_name], settings.resolved_target_repo)
     if ancestor.returncode != 0:
         return PullRequestPublication(
             status="blocked", branch_name=branch_name, base_branch=base_branch, artifact_dir=str(artifact_dir), summary="repair branch is not descended from target main"
@@ -226,7 +227,7 @@ def publish_and_merge_repair(
     product_error = _product_only_diff(settings, branch_name)
     if product_error:
         return PullRequestPublication(status="blocked", branch_name=branch_name, base_branch=base_branch, artifact_dir=str(artifact_dir), summary=product_error)
-    diff_check = _run(["git", "diff", "--check", f"{base_branch}...{branch_name}"], settings.resolved_target_repo)
+    diff_check = _run(["git", "diff", "--check", f"{settings.target_base_ref}...{branch_name}"], settings.resolved_target_repo)
     if diff_check.returncode != 0:
         return PullRequestPublication(
             status="blocked", branch_name=branch_name, base_branch=base_branch, artifact_dir=str(artifact_dir), summary=f"repair diff check failed: {_output(diff_check)}"
@@ -250,6 +251,18 @@ def publish_and_merge_repair(
             base_branch=base_branch,
             artifact_dir=artifact_dir.resolve(),
         )
+        if sha != branch_head_sha:
+            return PullRequestPublication(
+                status="published",
+                branch_name=branch_name,
+                base_branch=base_branch,
+                artifact_dir=str(artifact_dir),
+                local_ci_output=ci_output,
+                summary="ready pull request head SHA does not match validated repair branch; not merged",
+                pull_request_number=number,
+                pull_request_url=url,
+                head_sha=sha,
+            )
         ci_status = _wait_for_checks(repository=repository, token=token, sha=sha)
         if ci_status != "pass":
             return PullRequestPublication(

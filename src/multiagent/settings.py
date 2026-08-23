@@ -17,6 +17,7 @@ class MultiAgentSettings:
     tool_root: Path
     target_repo: Path
     model: str = "gpt-5.4-mini"
+    product_model: str = "gpt-5.4-mini"
     api_key: str | None = None
     base_url: str | None = None
     max_agent_turns: int = 20
@@ -42,6 +43,12 @@ class MultiAgentSettings:
         return (self.active_target_root or self.target_repo).resolve()
 
     @property
+    def target_base_ref(self) -> str:
+        """Remote-tracking ref that defines the product repair baseline."""
+
+        return f"origin/{self.target_base_branch}"
+
+    @property
     def resolved_artifact_root(self) -> Path:
         return (self.artifact_root or self.resolved_tool_root / "artifacts" / "multiagent-runs").resolve()
 
@@ -58,6 +65,7 @@ class MultiAgentSettings:
             tool_root=root,
             target_repo=target_repo,
             model=model,
+            product_model=os.getenv("MATSCI_NLP_MODEL", model).strip() or model,
             api_key=(os.getenv("MULTIAGENT_API_KEY") or os.getenv("OPENAI_API_KEY")),
             base_url=(os.getenv("MULTIAGENT_BASE_URL") or os.getenv("OPENAI_BASE_URL")),
             max_agent_turns=max_agent_turns,

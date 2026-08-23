@@ -12,6 +12,16 @@ def _settings(tmp_path: Path) -> MultiAgentSettings:
     return MultiAgentSettings(tool_root=tmp_path, target_repo=tmp_path, worktree_root=tmp_path / "worktrees")
 
 
+def _branch_run(commands: list[list[str]], *, branch_sha: str = "head-sha"):
+    def fake_run(args, _cwd):
+        commands.append(args)
+        if args[:3] == ["git", "rev-parse", "--verify"] and args[-1] == "fix/volume":
+            return subprocess.CompletedProcess(args, 0, f"{branch_sha}\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    return fake_run
+
+
 def test_publisher_requires_github_token(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
@@ -30,35 +40,20 @@ def test_publisher_rejects_non_fix_branch_before_push(monkeypatch, tmp_path: Pat
     assert "fix/<issue>" in result.summary
 
 
-def test_publisher_blocks_when_target_base_differs_from_origin(monkeypatch, tmp_path: Path):
+def test_publisher_requires_remote_tracking_base(monkeypatch, tmp_path: Path):
     settings = _settings(tmp_path)
+    monkeypatch.setattr(publisher, "_run", lambda args, _cwd: subprocess.CompletedProcess(args, 0, "", ""))
 
-    def fake_run(args, _cwd):
-        if args[:2] == ["git", "status"]:
-            return subprocess.CompletedProcess(args, 0, "", "")
-        if args[:2] == ["git", "show-ref"]:
-            return subprocess.CompletedProcess(args, 0, "", "")
-        if args[:2] == ["git", "rev-parse"]:
-            return subprocess.CompletedProcess(args, 0, "local\n" if args[-1] == "main" else "remote\n", "")
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(publisher, "_run", fake_run)
-
-    assert publisher._ensure_clean_tooling(settings) == "target base branch must match origin/main before publication"
+    assert publisher._ensure_clean_tooling(settings) == "target base ref does not exist: origin/main"
 
 
 def test_publisher_rejects_non_product_diff_before_push(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
-    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: "repair diff includes non-product paths: src/multiagent/tools.py")
     commands: list[list[str]] = []
-
-    def fake_run(args, _cwd):
-        commands.append(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(publisher, "_run", fake_run)
+    monkeypatch.setattr(publisher, "_run", _branch_run(commands))
 
     result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
 
@@ -70,24 +65,21 @@ def test_publisher_rejects_non_product_diff_before_push(monkeypatch, tmp_path: P
 def test_publisher_pushes_ready_pr_waits_ci_and_squash_merges(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
-    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: None)
     monkeypatch.setattr(publisher, "_run_branch_suite", lambda *_args: (True, "173 passed"))
     monkeypatch.setattr(publisher, "_github_repository", lambda *_args: "example/repo")
     monkeypatch.setattr(publisher, "_create_ready_pr", lambda **_kwargs: (42, "https://example.test/pr/42", "head-sha"))
     monkeypatch.setattr(publisher, "_wait_for_checks", lambda **_kwargs: "pass")
     observed: dict[str, object] = {}
+
     def merge(**kwargs):
         observed["merge"] = kwargs
         return "merge-sha"
 
     monkeypatch.setattr(publisher, "_squash_merge", merge)
-
-    def fake_run(args, _cwd):
-        observed.setdefault("commands", []).append(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(publisher, "_run", fake_run)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(publisher, "_run", _branch_run(commands))
 
     result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
 
@@ -95,20 +87,21 @@ def test_publisher_pushes_ready_pr_waits_ci_and_squash_merges(monkeypatch, tmp_p
     assert result.head_sha == "head-sha"
     assert result.merge_sha == "merge-sha"
     assert observed["merge"]["sha"] == "head-sha"
-    assert any(command[:2] == ["git", "push"] for command in observed["commands"])
+    assert any(command[:2] == ["git", "push"] for command in commands)
     assert "secret" not in result.model_dump_json()
 
 
 def test_publisher_retains_ready_pr_when_remote_ci_fails(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
-    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: None)
     monkeypatch.setattr(publisher, "_run_branch_suite", lambda *_args: (True, "173 passed"))
     monkeypatch.setattr(publisher, "_github_repository", lambda *_args: "example/repo")
     monkeypatch.setattr(publisher, "_create_ready_pr", lambda **_kwargs: (42, "https://example.test/pr/42", "head-sha"))
     monkeypatch.setattr(publisher, "_wait_for_checks", lambda **_kwargs: "fail")
-    monkeypatch.setattr(publisher, "_run", lambda args, _cwd: subprocess.CompletedProcess(args, 0, "", ""))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(publisher, "_run", _branch_run(commands))
     merge_called = False
 
     def merge(**_kwargs):
@@ -122,4 +115,30 @@ def test_publisher_retains_ready_pr_when_remote_ci_fails(monkeypatch, tmp_path: 
 
     assert result.status == "published"
     assert result.ci_status == "fail"
+    assert not merge_called
+
+
+def test_publisher_never_merges_when_pr_head_differs_from_validated_branch(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("GITHUB_TOKEN", "secret")
+    monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_load_production_artifact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(publisher, "_product_only_diff", lambda *_args: None)
+    monkeypatch.setattr(publisher, "_run_branch_suite", lambda *_args: (True, "173 passed"))
+    monkeypatch.setattr(publisher, "_github_repository", lambda *_args: "example/repo")
+    monkeypatch.setattr(publisher, "_create_ready_pr", lambda **_kwargs: (42, "https://example.test/pr/42", "unexpected-sha"))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(publisher, "_run", _branch_run(commands))
+    merge_called = False
+
+    def merge(**_kwargs):
+        nonlocal merge_called
+        merge_called = True
+        return "merge-sha"
+
+    monkeypatch.setattr(publisher, "_squash_merge", merge)
+
+    result = publish_and_merge_repair(_settings(tmp_path), branch_name="fix/volume", artifact_dir=tmp_path)
+
+    assert result.status == "published"
+    assert "does not match" in result.summary
     assert not merge_called

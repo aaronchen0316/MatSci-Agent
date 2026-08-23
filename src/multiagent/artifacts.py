@@ -28,12 +28,14 @@ class HarnessArtifactStore:
                 "objective": objective,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "model": settings.model,
+                "product_model": settings.product_model,
                 "disable_tracing": settings.disable_tracing,
                 "enable_live_mp": settings.enable_live_mp,
                 "enable_git_write": settings.enable_git_write,
                 "tool_root": str(settings.resolved_tool_root),
                 "target_repo": str(settings.resolved_target_repo),
                 "target_base_branch": settings.target_base_branch,
+                "target_base_ref": settings.target_base_ref,
             },
         )
         return store

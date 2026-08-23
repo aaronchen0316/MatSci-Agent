@@ -174,7 +174,7 @@ def create_target_base_worktree(settings: MultiAgentSettings) -> dict[str, str]:
     root.mkdir(parents=True, exist_ok=True)
     path = root / f".base-{uuid4().hex[:12]}"
     result = _run_completed(
-        ["git", "worktree", "add", "--detach", str(path), settings.target_base_branch],
+        ["git", "worktree", "add", "--detach", str(path), settings.target_base_ref],
         settings.resolved_target_repo,
     )
     if result.returncode != 0:
@@ -191,6 +191,12 @@ def _run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalI
     if inherited_pythonpath:
         source_paths.append(inherited_pythonpath)
     env["PYTHONPATH"] = os.pathsep.join(source_paths)
+    env["MATSCI_NLP_MODEL"] = settings.product_model
+    if settings.base_url:
+        env["MATSCI_LLM_BASE_URL"] = settings.base_url
+    if settings.api_key:
+        env["MULTIAGENT_PRODUCT_API_KEY"] = settings.api_key
+        env["MATSCI_LLM_API_KEY_ENV"] = "MULTIAGENT_PRODUCT_API_KEY"
     try:
         result = subprocess.run(
             [sys.executable, "-m", "multiagent.scoped_evaluator"],
@@ -323,7 +329,7 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
                 }
             )
         result = _run_completed(
-            ["git", "worktree", "add", "-b", safe_branch, str(worktree_path), settings.target_base_branch],
+            ["git", "worktree", "add", "-b", safe_branch, str(worktree_path), settings.target_base_ref],
             settings.resolved_target_repo,
         )
         if result.returncode != 0:

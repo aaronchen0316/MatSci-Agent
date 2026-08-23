@@ -23,6 +23,7 @@ def _repo(tmp_path: Path) -> Path:
     _run(["git", "config", "user.email", "test@example.com"], repo)
     _run(["git", "add", "-A"], repo)
     _run(["git", "commit", "-m", "base"], repo)
+    _run(["git", "update-ref", "refs/remotes/origin/multi-agent", "HEAD"], repo)
     _run(["git", "checkout", "-b", "retrieval-fix-1"], repo)
     return repo
 

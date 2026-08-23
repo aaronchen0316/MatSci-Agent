@@ -127,7 +127,7 @@ def validate_repair_test_evidence(
     repo_root = worktree_path.resolve()
     issues: list[str] = []
     try:
-        changed_sources, changed_tests, removed_tests = _changed_paths(repo_root, settings.target_base_branch)
+        changed_sources, changed_tests, removed_tests = _changed_paths(repo_root, settings.target_base_ref)
     except ValueError as exc:
         return RepairTestEvidence(status="blocked", issues=[str(exc)])
 
@@ -172,7 +172,7 @@ def validate_repair_test_evidence(
         if not issues:
             coverage_before, baseline_output, baseline_error = _baseline_coverage(
                 settings,
-                settings.target_base_branch,
+                settings.target_base_ref,
                 temporary / "baseline.json",
                 temporary / "baseline-env",
             )

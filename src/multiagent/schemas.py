@@ -322,3 +322,56 @@ class PullRequestPublication(BaseModel):
     head_sha: str | None = None
     merge_sha: str | None = None
     ci_status: Literal["pass", "fail", "timeout"] | None = None
+
+
+class ModelPreflightReport(BaseModel):
+    status: Literal["pass", "fallback", "blocked"]
+    primary_model: str
+    selected_model: str | None = None
+    selected_product_model: str | None = None
+    attempts: list[str] = Field(default_factory=list)
+    summary: str
+
+
+class RepairAuditRecord(BaseModel):
+    branch_name: str
+    head_sha: str | None = None
+    status: Literal["eligible", "rejected"]
+    reasons: list[str] = Field(default_factory=list)
+    artifact_dir: str | None = None
+    evidence_commit_sha: str | None = None
+    diff_paths: list[str] = Field(default_factory=list)
+    safe_namespace: bool = False
+    descends_from_target_main: bool = False
+    product_only_diff: bool = False
+    evidence_matches_head: bool = False
+    debugger_committed: bool = False
+    changed_tests_proven: bool = False
+    verifier_accepted: bool = False
+    fresh_live_passed: bool = False
+    publication_status: Literal["merged", "published", "blocked", "failed"] | None = None
+
+
+class RepairAuditReport(BaseModel):
+    status: Literal["pass", "fail"]
+    target_base_branch: str
+    target_base_sha: str | None = None
+    records: list[RepairAuditRecord] = Field(default_factory=list)
+
+
+class RepairSuiteAttempt(BaseModel):
+    scenario_name: str
+    harness_report: HarnessRunReport | None = None
+    publication: PullRequestPublication | None = None
+    summary: str
+
+
+class RepairSuiteReport(BaseModel):
+    status: Literal["pass", "fail", "blocked"]
+    summary: str
+    artifact_dir: str | None = None
+    model_preflight: ModelPreflightReport
+    audit_report: RepairAuditReport
+    baseline: LiveEvalSuiteReport | None = None
+    attempts: list[RepairSuiteAttempt] = Field(default_factory=list)
+    final: LiveEvalSuiteReport | None = None
