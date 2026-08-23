@@ -30,6 +30,23 @@ def test_publisher_rejects_non_fix_branch_before_push(monkeypatch, tmp_path: Pat
     assert "fix/<issue>" in result.summary
 
 
+def test_publisher_blocks_when_target_base_differs_from_origin(monkeypatch, tmp_path: Path):
+    settings = _settings(tmp_path)
+
+    def fake_run(args, _cwd):
+        if args[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[:2] == ["git", "show-ref"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(args, 0, "local\n" if args[-1] == "main" else "remote\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(publisher, "_run", fake_run)
+
+    assert publisher._ensure_clean_tooling(settings) == "target base branch must match origin/main before publication"
+
+
 def test_publisher_rejects_non_product_diff_before_push(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)

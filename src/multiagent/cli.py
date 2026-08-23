@@ -93,7 +93,25 @@ def _repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
         text=True,
         check=False,
     )
-    return None if ref.returncode == 0 else f"base branch does not exist: {settings.target_base_branch}"
+    if ref.returncode != 0:
+        return f"base branch does not exist: {settings.target_base_branch}"
+    local = subprocess.run(
+        ["git", "rev-parse", settings.target_base_branch],
+        cwd=str(settings.resolved_target_repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    remote = subprocess.run(
+        ["git", "rev-parse", f"origin/{settings.target_base_branch}"],
+        cwd=str(settings.resolved_target_repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if local.returncode != 0 or remote.returncode != 0 or local.stdout.strip() != remote.stdout.strip():
+        return f"target base branch must match origin/{settings.target_base_branch} before live repair"
+    return None
 
 
 def _run_from_target_base(settings: MultiAgentSettings, action):

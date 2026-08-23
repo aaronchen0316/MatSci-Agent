@@ -52,7 +52,13 @@ def _ensure_clean_tooling(settings: MultiAgentSettings) -> str | None:
         ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{settings.target_base_branch}"],
         settings.resolved_target_repo,
     )
-    return None if base.returncode == 0 else f"target base branch does not exist: {settings.target_base_branch}"
+    if base.returncode != 0:
+        return f"target base branch does not exist: {settings.target_base_branch}"
+    local = _run(["git", "rev-parse", settings.target_base_branch], settings.resolved_target_repo)
+    remote = _run(["git", "rev-parse", f"origin/{settings.target_base_branch}"], settings.resolved_target_repo)
+    if local.returncode != 0 or remote.returncode != 0 or local.stdout.strip() != remote.stdout.strip():
+        return f"target base branch must match origin/{settings.target_base_branch} before publication"
+    return None
 
 
 def _run_branch_suite(settings: MultiAgentSettings, branch_name: str) -> tuple[bool, str]:

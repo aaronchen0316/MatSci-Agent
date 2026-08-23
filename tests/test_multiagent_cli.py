@@ -88,6 +88,23 @@ def test_repair_live_requires_live_and_git_mutation_flags(monkeypatch, tmp_path:
     assert "MULTIAGENT_ENABLE_LIVE_MP=1 is required" in result.stdout
 
 
+def test_repair_live_requires_target_base_to_match_origin(monkeypatch, tmp_path: Path):
+    settings = MultiAgentSettings(tool_root=tmp_path, target_repo=tmp_path, enable_live_mp=True, enable_git_write=True)
+
+    def fake_run(args, **_kwargs):
+        if args[:2] == ["git", "status"]:
+            output = ""
+        elif args[:2] == ["git", "show-ref"]:
+            output = ""
+        else:
+            output = "local-sha\n" if args[-1] == "main" else "remote-sha\n"
+        return __import__("subprocess").CompletedProcess(args, 0, output, "")
+
+    monkeypatch.setattr(multiagent_cli.subprocess, "run", fake_run)
+
+    assert multiagent_cli._repair_prerequisite_error(settings) == "target base branch must match origin/main before live repair"
+
+
 def test_repair_live_resolves_named_scenario(monkeypatch, tmp_path: Path):
     settings = MultiAgentSettings(
         tool_root=tmp_path, target_repo=tmp_path,
