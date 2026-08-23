@@ -178,15 +178,22 @@ class MultiAgentHarness:
         harness.runtime_rebinder = rebind_runtime
         return harness
 
-    async def repair_scenario(self, scenario: LiveEvalScenario) -> HarnessRunReport:
+    async def repair_scenario(
+        self,
+        scenario: LiveEvalScenario,
+        *,
+        existing_branch_name: str | None = None,
+        existing_worktree_path: str | None = None,
+        adopted_debugger_report: CodexDebuggerReport | None = None,
+    ) -> HarnessRunReport:
         """Run the fixed specialist loop for one failing live validation scenario."""
 
         objective = scenario.query
         store = HarnessArtifactStore.create(self.settings, scenario.name)
         attempts: list[HarnessAttemptRecord] = []
         refresh_feedback: RefreshFeedback | None = None
-        branch_name: str | None = None
-        worktree_path: str | None = None
+        branch_name = existing_branch_name
+        worktree_path = existing_worktree_path
         latest_tester: RetrievalTesterReport | None = None
         latest_critic: MaterialsQueryCriticReport | None = None
         latest_debugger: CodexDebuggerReport | None = None
@@ -334,22 +341,24 @@ class MultiAgentHarness:
 
             if tester_report.status == "pass" and critic_report.verdict == "agree":
                 if self._has_real_approval_evidence(tester_report):
-                    attempt.stop_reason_fragment = "dual_review_pass"
+                    if adopted_debugger_report is None:
+                        attempt.stop_reason_fragment = "dual_review_pass"
+                        attempts.append(attempt)
+                        return finish(
+                            status="pass",
+                            stop_reason="dual_review_pass",
+                            summary="Retrieval Tester and Materials Query Critic approved real Materials Project evidence.",
+                            next_step="Review evaluator evidence or continue with broader eval coverage.",
+                        )
+                else:
+                    attempt.stop_reason_fragment = "scientific_evidence_blocked"
                     attempts.append(attempt)
                     return finish(
-                        status="pass",
-                        stop_reason="dual_review_pass",
-                        summary="Retrieval Tester and Materials Query Critic approved real Materials Project evidence.",
-                        next_step="Review evaluator evidence or continue with broader eval coverage.",
+                        status="blocked",
+                        stop_reason="scientific_evidence_blocked",
+                        summary="Dual review could not certify a pass without real Materials Project candidate evidence.",
+                        next_step="Enable live MP evaluation and attach its typed evaluator output to the tester report.",
                     )
-                attempt.stop_reason_fragment = "scientific_evidence_blocked"
-                attempts.append(attempt)
-                return finish(
-                    status="blocked",
-                    stop_reason="scientific_evidence_blocked",
-                    summary="Dual review could not certify a pass without real Materials Project candidate evidence.",
-                    next_step="Enable live MP evaluation and attach its typed evaluator output to the tester report.",
-                )
 
             if tester_report.status == "fail" and critic_report.verdict == "disagree":
                 if attempt_number >= _MAX_REVIEW_CYCLES:
@@ -370,21 +379,32 @@ class MultiAgentHarness:
                 )
                 continue
 
-            debugger_input = CodexDebuggerInput(
-                tester_report=tester_report,
-                critic_report=critic_report,
-                target_branch_prefix=self.settings.repair_branch_prefix,
-                existing_branch_name=branch_name,
-                existing_worktree_path=worktree_path,
+            use_adopted_patch = (
+                tester_report.status == "pass"
+                and critic_report.verdict == "agree"
+                and adopted_debugger_report is not None
             )
-            store.write_model(f"attempts/{attempt_number}/codex_debugger_input.json", debugger_input)
-            try:
-                debugger_report = await self.codex_debugger_runner(debugger_input)
-            except Exception as exc:
-                debugger_report = CodexDebuggerReport(
-                    status="blocked",
-                    change_summary=f"Codex Debugger execution failed: {type(exc).__name__}",
+            if use_adopted_patch:
+                debugger_report = adopted_debugger_report
+                adopted_debugger_report = None
+                store.write_model(f"attempts/{attempt_number}/adopted_debugger_report.json", debugger_report)
+            else:
+                adopted_debugger_report = None
+                debugger_input = CodexDebuggerInput(
+                    tester_report=tester_report,
+                    critic_report=critic_report,
+                    target_branch_prefix=self.settings.repair_branch_prefix,
+                    existing_branch_name=branch_name,
+                    existing_worktree_path=worktree_path,
                 )
+                store.write_model(f"attempts/{attempt_number}/codex_debugger_input.json", debugger_input)
+                try:
+                    debugger_report = await self.codex_debugger_runner(debugger_input)
+                except Exception as exc:
+                    debugger_report = CodexDebuggerReport(
+                        status="blocked",
+                        change_summary=f"Codex Debugger execution failed: {type(exc).__name__}",
+                    )
             store.write_model(f"attempts/{attempt_number}/codex_debugger_report.json", debugger_report)
             latest_debugger = debugger_report
             branch_name = debugger_report.branch_name or branch_name

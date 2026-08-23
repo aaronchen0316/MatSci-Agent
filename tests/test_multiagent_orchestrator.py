@@ -363,6 +363,38 @@ def test_verifier_accepted_requires_fresh_tester_and_critic_cycle(tmp_path: Path
     assert debugger_calls[0].existing_branch_name is None
 
 
+def test_adopted_patch_requires_verifier_then_fresh_dual_review(tmp_path: Path):
+    repair_worktree = tmp_path / "worktrees" / "adopted"
+    repair_worktree.mkdir(parents=True)
+    debugger_calls: list[CodexDebuggerInput] = []
+    harness = _make_harness(
+        tmp_path,
+        tester_results=[
+            _tester_report("pass", "already fixed", live_evaluation=_live_evidence()),
+            _tester_report("pass", "fresh pass", live_evaluation=_live_evidence()),
+        ],
+        critic_results=[_critic_report("agree"), _critic_report("agree")],
+        verifier_results=[_verifier_report("accepted", "existing patch accepted")],
+        debugger_calls=debugger_calls,
+    )
+    adopted = _debugger_report(branch_name="fix/adopted", worktree_path=str(repair_worktree))
+
+    report = asyncio.run(
+        harness.repair_scenario(
+            _scenario(),
+            existing_branch_name="fix/adopted",
+            existing_worktree_path=str(repair_worktree),
+            adopted_debugger_report=adopted,
+        )
+    )
+
+    assert report.status == "pass"
+    assert report.attempt_count == 2
+    assert report.latest_debugger_report is not None
+    assert report.latest_debugger_report.commit_sha == "abc123"
+    assert not debugger_calls
+
+
 def test_verifier_refresh_rebinds_agents_to_repair_worktree(tmp_path: Path):
     repair_worktree = tmp_path / "worktrees" / "retrieval-fix-1"
     repair_worktree.mkdir(parents=True)

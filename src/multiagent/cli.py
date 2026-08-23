@@ -34,7 +34,9 @@ def validate() -> None:
 
 
 @app.command("validate-repair")
-def validate_repair() -> None:
+def validate_repair(
+    adopt: list[str] | None = typer.Option(None, "--adopt", help="Explicit retained fix/<issue> branch to review, retry, and publish."),
+) -> None:
     """Validate, repair each live failure once, merge proven repairs, then validate again."""
 
     settings = MultiAgentSettings.from_env()
@@ -46,7 +48,7 @@ def validate_repair() -> None:
     if live_settings is None:
         report = blocked_validation_repair(settings, preflight, summary=preflight.summary)
     else:
-        report = run_validation_repair(live_settings, preflight)
+        report = run_validation_repair(live_settings, preflight, adopt_branches=adopt)
     console.print_json(report.model_dump_json())
     if report.status != "pass":
         raise typer.Exit(code=1)

@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 import subprocess
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from uuid import uuid4
 
 from multiagent.artifacts import HarnessArtifactStore
-from multiagent.live_suite import LiveEvalScenario, LiveEvalSuiteReport, run_live_suite
+from multiagent.live_suite import LiveEvalScenario, LiveEvalSuiteReport, get_live_scenario, run_live_suite
 from multiagent.orchestrator import MultiAgentHarness
-from multiagent.publisher import publish_and_merge_repair
+from multiagent.publisher import _product_only_diff, _validate_branch, publish_and_merge_repair
 from multiagent.schemas import (
+    AdoptedBranchAttempt,
+    CodexDebuggerReport,
     HarnessRunReport,
     ModelPreflightReport,
     PullRequestPublication,
@@ -19,6 +22,23 @@ from multiagent.schemas import (
 )
 from multiagent.settings import MultiAgentSettings
 from multiagent.tools import cleanup_worktree, create_target_base_worktree
+
+
+@dataclass(frozen=True)
+class _AdoptionContext:
+    branch_name: str
+    head_sha: str
+    scenario: LiveEvalScenario
+    debugger_report: CodexDebuggerReport
+    artifact_dir: Path
+
+
+def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False)
+
+
+def _output(result: subprocess.CompletedProcess[str]) -> str:
+    return ((result.stdout or "") + (result.stderr or "")).strip()
 
 
 def validation_repair_prerequisite_error(settings: MultiAgentSettings) -> str | None:
@@ -95,6 +115,181 @@ def run_scenario_repair(
     return report, publication
 
 
+def _branch_head(settings: MultiAgentSettings, branch_name: str) -> str | None:
+    result = _run(["git", "rev-parse", "--verify", branch_name], settings.resolved_target_repo)
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def _has_product_diff(settings: MultiAgentSettings, branch_name: str) -> tuple[bool, str | None]:
+    result = _run(["git", "diff", "--quiet", f"{settings.target_base_ref}...{branch_name}"], settings.resolved_target_repo)
+    if result.returncode in {0, 1}:
+        return result.returncode == 1, None
+    return False, f"unable to inspect branch diff: {_output(result)}"
+
+
+def _matching_adoption_context(settings: MultiAgentSettings, branch_name: str, head_sha: str) -> _AdoptionContext | str:
+    matches: list[tuple[Path, HarnessRunReport]] = []
+    for report_path in settings.resolved_artifact_root.glob("*/harness_run_report.json"):
+        try:
+            report = HarnessRunReport.model_validate_json(report_path.read_text())
+        except Exception:
+            continue
+        debugger = report.latest_debugger_report
+        if report.branch_name == branch_name and debugger and debugger.status == "patched" and debugger.commit_sha == head_sha:
+            matches.append((report_path.parent, report))
+    if not matches:
+        return "no stored debugger evidence matches the current branch head"
+    artifact_dir, report = max(matches, key=lambda item: item[0].name)
+    scenario_name = str((report.latest_tester_report.evidence if report.latest_tester_report else {}).get("scenario_name") or "")
+    if not scenario_name:
+        return "stored debugger evidence does not name a live scenario"
+    try:
+        scenario = get_live_scenario(scenario_name)
+    except ValueError:
+        return "stored debugger evidence names an unknown live scenario"
+    debugger = report.latest_debugger_report
+    assert debugger is not None
+    return _AdoptionContext(
+        branch_name=branch_name,
+        head_sha=head_sha,
+        scenario=scenario,
+        debugger_report=debugger,
+        artifact_dir=artifact_dir,
+    )
+
+
+def _rebase_adopted_branch(settings: MultiAgentSettings, context: _AdoptionContext) -> tuple[str | None, str | None]:
+    ancestor = _run(
+        ["git", "merge-base", "--is-ancestor", settings.target_base_ref, context.branch_name],
+        settings.resolved_target_repo,
+    )
+    if ancestor.returncode == 0:
+        return context.head_sha, None
+    root = settings.worktree_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    worktree = root / f".adopt-rebase-{uuid4().hex[:12]}"
+    add = _run(["git", "worktree", "add", str(worktree), context.branch_name], settings.resolved_target_repo)
+    if add.returncode != 0:
+        return None, f"unable to create adoption rebase worktree: {_output(add)}"
+    rebase = _run(["git", "rebase", settings.target_base_ref], worktree)
+    if rebase.returncode != 0:
+        return None, f"rebase failed; retained worktree {worktree}: {_output(rebase)}"
+    head = _branch_head(settings, context.branch_name)
+    cleanup = cleanup_worktree(settings, str(worktree))
+    if cleanup.get("status") != "removed":
+        return None, f"rebased branch but could not remove temporary worktree: {cleanup.get('reason', 'unknown error')}"
+    return head, None
+
+
+def _create_adoption_worktree(settings: MultiAgentSettings, branch_name: str) -> tuple[Path | None, str | None]:
+    root = settings.worktree_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    worktree = root / f".adopt-{uuid4().hex[:12]}"
+    add = _run(["git", "worktree", "add", str(worktree), branch_name], settings.resolved_target_repo)
+    if add.returncode != 0:
+        return None, f"unable to create adoption worktree: {_output(add)}"
+    return worktree.resolve(), None
+
+
+def run_adopted_branch_repair(
+    settings: MultiAgentSettings,
+    branch_name: str,
+    *,
+    harness_builder: Callable[[MultiAgentSettings], MultiAgentHarness] = MultiAgentHarness.build,
+    publisher: Callable[..., PullRequestPublication] = publish_and_merge_repair,
+) -> AdoptedBranchAttempt:
+    """Review or retry one explicit retained product repair branch."""
+
+    try:
+        branch_name = _validate_branch(branch_name, require_fix=True)
+    except ValueError as exc:
+        return AdoptedBranchAttempt(branch_name=branch_name, status="rejected", summary=str(exc))
+    head_sha = _branch_head(settings, branch_name)
+    if head_sha is None:
+        return AdoptedBranchAttempt(branch_name=branch_name, status="rejected", summary="repair branch does not exist")
+    has_product_diff, diff_error = _has_product_diff(settings, branch_name)
+    if diff_error:
+        return AdoptedBranchAttempt(branch_name=branch_name, status="blocked", summary=diff_error)
+    if not has_product_diff:
+        deleted = _run(["git", "branch", "-D", branch_name], settings.resolved_target_repo)
+        if deleted.returncode == 0:
+            return AdoptedBranchAttempt(branch_name=branch_name, status="deleted", summary="no product diff from current origin/main")
+        return AdoptedBranchAttempt(
+            branch_name=branch_name,
+            status="blocked",
+            summary=f"no product diff, but branch deletion failed: {_output(deleted)}",
+        )
+    product_error = _product_only_diff(settings, branch_name)
+    if product_error:
+        return AdoptedBranchAttempt(branch_name=branch_name, status="rejected", summary=product_error)
+    context = _matching_adoption_context(settings, branch_name, head_sha)
+    if isinstance(context, str):
+        return AdoptedBranchAttempt(branch_name=branch_name, status="rejected", summary=context)
+    rebased_head, rebase_error = _rebase_adopted_branch(settings, context)
+    if rebase_error or rebased_head is None:
+        return AdoptedBranchAttempt(
+            branch_name=branch_name,
+            status="blocked",
+            scenario_name=context.scenario.name,
+            artifact_dir=str(context.artifact_dir),
+            summary=rebase_error or "unable to rebase adopted branch",
+        )
+    worktree, worktree_error = _create_adoption_worktree(settings, branch_name)
+    if worktree_error or worktree is None:
+        return AdoptedBranchAttempt(
+            branch_name=branch_name,
+            status="blocked",
+            scenario_name=context.scenario.name,
+            artifact_dir=str(context.artifact_dir),
+            rebased_from_sha=context.head_sha if rebased_head != context.head_sha else None,
+            summary=worktree_error or "unable to create adoption worktree",
+        )
+    adopted_debugger = context.debugger_report.model_copy(
+        update={
+            "branch_name": branch_name,
+            "worktree_path": str(worktree),
+            "commit_sha": rebased_head,
+            "status": "patched",
+        }
+    )
+    try:
+        scoped = replace(settings, active_target_root=worktree)
+        report = asyncio.run(
+            harness_builder(scoped).repair_scenario(
+                context.scenario,
+                existing_branch_name=branch_name,
+                existing_worktree_path=str(worktree),
+                adopted_debugger_report=adopted_debugger,
+            )
+        )
+    except Exception as exc:
+        cleanup_worktree(settings, str(worktree))
+        return AdoptedBranchAttempt(
+            branch_name=branch_name,
+            status="blocked",
+            scenario_name=context.scenario.name,
+            artifact_dir=str(context.artifact_dir),
+            rebased_from_sha=context.head_sha if rebased_head != context.head_sha else None,
+            summary=f"adopted branch harness failed: {type(exc).__name__}",
+        )
+    publication: PullRequestPublication | None = None
+    if report.status == "pass" and report.artifact_dir:
+        publication = publisher(settings, branch_name=branch_name, artifact_dir=Path(report.artifact_dir))
+        Path(report.artifact_dir, "pull_request_publication.json").write_text(publication.model_dump_json(indent=2) + "\n")
+    status = "merged" if publication and publication.status == "merged" else "failed" if report.status == "fail" else "blocked" if report.status == "blocked" else "failed"
+    summary = publication.summary if publication is not None else report.summary
+    return AdoptedBranchAttempt(
+        branch_name=branch_name,
+        status=status,
+        scenario_name=context.scenario.name,
+        artifact_dir=report.artifact_dir,
+        rebased_from_sha=context.head_sha if rebased_head != context.head_sha else None,
+        harness_report=report,
+        publication=publication,
+        summary=summary,
+    )
+
+
 def _failed_scenarios(report: LiveEvalSuiteReport) -> list[LiveEvalScenario]:
     return [
         result.scenario
@@ -113,7 +308,9 @@ def run_validation_repair(
     *,
     evaluator: Callable[[MultiAgentSettings], LiveEvalSuiteReport] = run_live_validation,
     repair_runner: Callable[[MultiAgentSettings, LiveEvalScenario], tuple[HarnessRunReport, PullRequestPublication | None]] = run_scenario_repair,
+    adoption_runner: Callable[[MultiAgentSettings, str], AdoptedBranchAttempt] = run_adopted_branch_repair,
     base_refresher: Callable[[MultiAgentSettings], str | None] = refresh_target_base,
+    adopt_branches: list[str] | None = None,
 ) -> ValidationRepairReport:
     """Validate eight live scenarios, repair each failure once, then revalidate."""
 
@@ -122,12 +319,26 @@ def run_validation_repair(
 
     baseline = evaluator(settings)
     store.write_model("baseline_validation.json", baseline)
+    adopted_branches: list[AdoptedBranchAttempt] = []
     attempts: list[ValidationRepairAttempt] = []
     current = baseline
     attempted: set[str] = set()
     refresh_error: str | None = None
 
-    while True:
+    for branch_name in adopt_branches or []:
+        adopted = adoption_runner(settings, branch_name)
+        adopted_branches.append(adopted)
+        store.write_model(f"adopted/{len(adopted_branches)}/{branch_name.replace('/', '_')}.json", adopted)
+        if adopted.scenario_name:
+            attempted.add(adopted.scenario_name)
+        if adopted.status == "merged":
+            refresh_error = base_refresher(settings)
+            if refresh_error is not None:
+                break
+            current = evaluator(settings)
+            store.write_model(f"adopted_retests/{len(adopted_branches)}_validation.json", current)
+
+    while refresh_error is None:
         pending = [scenario for scenario in _failed_scenarios(current) if scenario.name not in attempted]
         if not pending:
             break
@@ -165,6 +376,7 @@ def run_validation_repair(
         artifact_dir=str(store.run_dir),
         model_preflight=model_preflight,
         baseline=baseline,
+        adopted_branches=adopted_branches,
         attempts=attempts,
         final=final,
     )

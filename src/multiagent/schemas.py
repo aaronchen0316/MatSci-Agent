@@ -340,11 +340,23 @@ class ValidationRepairAttempt(BaseModel):
     summary: str
 
 
+class AdoptedBranchAttempt(BaseModel):
+    branch_name: str
+    status: Literal["merged", "rejected", "deleted", "blocked", "failed"]
+    summary: str
+    scenario_name: str | None = None
+    artifact_dir: str | None = None
+    rebased_from_sha: str | None = None
+    harness_report: HarnessRunReport | None = None
+    publication: PullRequestPublication | None = None
+
+
 class ValidationRepairReport(BaseModel):
     status: Literal["pass", "fail", "blocked"]
     summary: str
     artifact_dir: str | None = None
     model_preflight: ModelPreflightReport
     baseline: LiveEvalSuiteReport | None = None
+    adopted_branches: list[AdoptedBranchAttempt] = Field(default_factory=list)
     attempts: list[ValidationRepairAttempt] = Field(default_factory=list)
     final: LiveEvalSuiteReport | None = None

@@ -93,3 +93,28 @@ def test_validate_repair_persists_blocked_preflight_report(monkeypatch, tmp_path
 
     assert result.exit_code == 1
     assert "model endpoint rejected request" in result.stdout
+
+
+def test_validate_repair_forwards_explicit_adoption_branches(monkeypatch, tmp_path: Path):
+    settings = _settings(tmp_path)
+    report = ValidationRepairReport(status="pass", summary="ok", model_preflight=_preflight(settings)[1])
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(multiagent_cli, "validation_repair_prerequisite_error", lambda _settings: None)
+    monkeypatch.setattr(multiagent_cli, "prepare_live_models", lambda value: _preflight(value))
+
+    def run(value, preflight, *, adopt_branches):
+        observed["settings"] = value
+        observed["preflight"] = preflight
+        observed["adopt_branches"] = adopt_branches
+        return report
+
+    monkeypatch.setattr(multiagent_cli, "run_validation_repair", run)
+
+    result = runner.invoke(
+        multiagent_cli.app,
+        ["validate-repair", "--adopt", "fix/formation", "--adopt", "fix/volume"],
+    )
+
+    assert result.exit_code == 0
+    assert observed["adopt_branches"] == ["fix/formation", "fix/volume"]
