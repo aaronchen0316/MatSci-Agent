@@ -84,7 +84,7 @@ def test_repair_validation_rejects_per_file_coverage_regression(monkeypatch, tmp
             return real_run(args, cwd)
         return subprocess.CompletedProcess(args, 0, "1 passed", "")
 
-    def fake_pytest(args, _cwd, _environment_path):
+    def fake_pytest(args, _cwd, _environment_path, _tooling_root):
         pytest_commands.append(args)
         return subprocess.CompletedProcess(args, 0, "1 passed", "")
 
@@ -111,4 +111,39 @@ def test_repair_validation_rejects_per_file_coverage_regression(monkeypatch, tmp
     assert evidence.status == "fail"
     assert evidence.coverage_regressions == ["src/matsci_agent/module.py: 90.00% -> 80.00%"]
     assert "changed production-file coverage decreased" in evidence.issues
-    assert any(command[:5] == ["uv", "run", "--extra", "dev", "pytest"] for command in pytest_commands)
+    assert any(command[:2] == ["--collect-only", "-q"] for command in pytest_commands)
+
+
+def test_repair_validation_uses_tooling_dev_dependencies_and_target_source(monkeypatch, tmp_path: Path):
+    repo = _repo(tmp_path)
+    tooling = tmp_path / "tooling"
+    (tooling / "src").mkdir(parents=True)
+    settings = MultiAgentSettings(
+        tool_root=tooling,
+        target_repo=repo,
+        target_base_branch="multi-agent",
+        worktree_root=tmp_path / "worktrees",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_subprocess(args, **kwargs):
+        observed["args"] = args
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, "1 passed", "")
+
+    monkeypatch.setattr(repair_validation.subprocess, "run", fake_subprocess)
+
+    repair_validation._run_pytest(["-q", "tests/test_module.py"], repo, tmp_path / "env", settings.resolved_tool_root)
+
+    assert observed["args"] == [
+        "uv",
+        "run",
+        "--project",
+        str(tooling.resolve()),
+        "--extra",
+        "dev",
+        "pytest",
+        "-q",
+        "tests/test_module.py",
+    ]
+    assert str(observed["env"]["PYTHONPATH"]).split(":")[0] == str((repo / "src").resolve())

@@ -15,10 +15,27 @@ def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False)
 
 
-def _run_pytest(args: list[str], cwd: Path, environment_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_pytest(
+    pytest_args: list[str],
+    cwd: Path,
+    environment_path: Path,
+    tooling_root: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Run target-worktree tests using the tooling branch's dev dependencies."""
+
     env = os.environ.copy()
     env["UV_PROJECT_ENVIRONMENT"] = str(environment_path)
-    return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False, env=env)
+    target_source = str((cwd / "src").resolve())
+    inherited_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(path for path in [target_source, inherited_pythonpath] if path)
+    return subprocess.run(
+        ["uv", "run", "--project", str(tooling_root), "--extra", "dev", "pytest", *pytest_args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
 
 
 def _output(result: subprocess.CompletedProcess[str]) -> str:
@@ -59,20 +76,21 @@ def _changed_paths(repo_root: Path, base_branch: str) -> tuple[list[str], list[s
     return sorted(set(sources)), sorted(set(tests)), sorted(set(removed_tests))
 
 
-def _coverage(repo_root: Path, output_path: Path, environment_path: Path) -> tuple[dict[str, float], str]:
+def _coverage(
+    repo_root: Path,
+    output_path: Path,
+    environment_path: Path,
+    tooling_root: Path,
+) -> tuple[dict[str, float], str]:
     result = _run_pytest(
         [
-            "uv",
-            "run",
-            "--extra",
-            "dev",
-            "pytest",
             "-q",
             "--cov=src/matsci_agent",
             f"--cov-report=json:{output_path}",
         ],
         repo_root,
         environment_path,
+        tooling_root,
     )
     output = _output(result)
     if result.returncode != 0 or not output_path.is_file():
@@ -107,7 +125,7 @@ def _baseline_coverage(
     if add.returncode != 0:
         return {}, "", f"unable to create baseline worktree: {_output(add)}"
     try:
-        coverage, output = _coverage(baseline, output_path, environment_path)
+        coverage, output = _coverage(baseline, output_path, environment_path, settings.resolved_tool_root)
         if not coverage:
             return {}, output, "baseline coverage command failed"
         return coverage, output, None
@@ -155,14 +173,16 @@ def validate_repair_test_evidence(
         temporary = Path(directory)
         if not issues:
             collect = _run_pytest(
-                ["uv", "run", "--extra", "dev", "pytest", "--collect-only", "-q", *normalized_targets],
+                ["--collect-only", "-q", *normalized_targets],
                 repo_root,
                 temporary / "targeted-env",
+                settings.resolved_tool_root,
             )
             targeted = _run_pytest(
-                ["uv", "run", "--extra", "dev", "pytest", "-q", *normalized_targets],
+                ["-q", *normalized_targets],
                 repo_root,
                 temporary / "targeted-env",
+                settings.resolved_tool_root,
             )
             targeted_output = _output(collect) + "\n" + _output(targeted)
             if collect.returncode != 0:
@@ -180,6 +200,7 @@ def validate_repair_test_evidence(
                 repo_root,
                 temporary / "repair.json",
                 temporary / "repair-env",
+                settings.resolved_tool_root,
             )
             full_output = "\n".join(item for item in [baseline_output, repair_coverage_output] if item)
             if baseline_error:
