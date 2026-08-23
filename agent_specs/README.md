@@ -73,6 +73,7 @@ Enable only when ready:
 - `MULTIAGENT_ENABLE_GIT_WRITE=1`
 - `MULTIAGENT_ARTIFACT_ROOT=artifacts/multiagent-runs`
 - `MULTIAGENT_REPAIR_BRANCH_PREFIX=retrieval-fix`
+- `MULTIAGENT_BASE_BRANCH=multi-agent`
 
 ## Install
 
@@ -85,6 +86,7 @@ uv sync --extra dev --extra agents
 ```bash
 uv run matsci-multiagent plan "Eval and repair retrieval quality for current code base"
 uv run matsci-multiagent eval-live
+MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent repair-live --scenario volume
 ```
 
 Later, when ready to run real model calls:
@@ -97,3 +99,15 @@ uv run matsci-multiagent run "Eval and repair retrieval quality for current code
 ```
 
 `eval-live` is intentionally opt-in. It needs MP and LLM credentials and writes evidence under the ignored artifact root.
+
+`publish-pr` is separately opt-in through `GITHUB_TOKEN`. Production use requires the successful repair artifact:
+
+```bash
+uv run matsci-multiagent publish-pr retrieval-fix-1 --artifact-dir artifacts/multiagent-runs/<run-id>
+```
+
+Unsafe inspection branches require explicit validation-only draft wording and can never become merge-ready through this command:
+
+```bash
+uv run matsci-multiagent publish-pr retrieval-fix-retry --validation-only --reason "synthetic fixture branch"
+```

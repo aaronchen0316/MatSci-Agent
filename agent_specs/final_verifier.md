@@ -14,6 +14,8 @@ Review debugger output against tester + critic evidence.
 - reject fixes that improve pass rate by weakening scientific validity
 - reject broadened queries that admit wrong material families or hide deterministic scientific violations
 - review full worktree patch, not only diff stat, before accepting change
+- review deterministic repair-test evidence before accepting: changed tests collect/pass, full suite pass, changed-file coverage, and test-file diff
+- reject malformed, duplicate, unrelated, deleted, renamed, weakened, or coverage-reducing test edits
 - an `accepted` patch always requires a fresh Retrieval Tester + Materials Query Critic cycle
 - set `requires_tester_refresh` to `true` for `accepted` and `needs_tester_refresh`; set it to `false` otherwise
 

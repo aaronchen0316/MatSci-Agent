@@ -90,6 +90,8 @@ Expected behavior:
 - may open isolated git branches/worktrees for debugger changes
 - records non-secret run artifacts; removes clean temporary worktrees while retaining repair branches
 - re-runs accepted repair validation from the repair worktree source, not the parent checkout
+- supports one-scenario live repair with deterministic test and per-file coverage gates before publication
+- uses an explicit guarded publisher for draft PRs to `multi-agent`; normal repair runs never push or merge
 - should preserve the existing deterministic shortlist pipeline as source of truth
 
 ### Task Registry

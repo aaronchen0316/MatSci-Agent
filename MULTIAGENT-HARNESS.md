@@ -59,9 +59,21 @@ Tester refresh feedback is typed and records whether it came from Critic or Fina
 
 The harness allows three total Tester/Critic review cycles. A requested refresh after cycle three ends with `review_cycle_exhausted`; an accepted patch never bypasses this limit.
 
+`repair-live --scenario <name>` binds the repair loop to one named live regression contract. Python injects the exact query and constraints into every Tester cycle, runs scoped evaluation from the active repair worktree, and rejects a retest that is blocked, fails, or misses scenario quality assertions.
+
+Production live repairs require deterministic test proof before Verifier acceptance can become useful:
+
+1. A committed repair changes production Python and one or more Python tests.
+2. Debugger reports exact changed test files and targets.
+3. Changed tests collect and pass, then the full suite passes.
+4. Per-file line coverage for every changed production file does not decrease from the base branch.
+5. Deleted, renamed, malformed, duplicate, unrelated, or coverage-reducing test edits are rejection evidence for Final Verifier.
+
 ## Artifacts and Safety
 Each run writes non-secret typed inputs, reports, evaluator evidence, patch/commit evidence, and cleanup results under ignored `artifacts/multiagent-runs/<run-id>/`.
 
-Default mode is read-only and offline. Live MP evaluation and Git writes are independent opt-ins. The harness never pushes branches or opens pull requests.
+Default mode is read-only and offline. Live MP evaluation and Git writes are independent opt-ins. Normal `run` never pushes branches or opens pull requests.
+
+`publish-pr` is a separate explicit command. Production publication requires a clean base checkout, a repair branch descended from `MULTIAGENT_BASE_BRANCH`, successful stored live-repair evidence, clean diff, and a fresh full local suite. It pushes only that branch and creates a draft PR to the base branch using `GITHUB_TOKEN`; GitHub Actions remains required before a human merge. `--validation-only --reason ...` may create a conspicuously non-mergeable draft for unsafe inspection branches such as `retrieval-fix-retry`.
 
 Worktree tools require a registered Git worktree below the configured worktree root. File mutations reject traversal even when an input begins with an allowlisted prefix; structured pytest targets must resolve under `tests/`.
