@@ -39,8 +39,11 @@ Implementation shape:
 12. Rebind Tester and Critic tools to an accepted repair worktree; execute live evaluation in a subprocess importing that worktree's source tree.
 13. Bind `repair-live` to one named live scenario and enforce its exact query, constraints, and quality assertions on initial and repaired-worktree evaluation.
 14. Require deterministic repair-test evidence: changed test collection/pass, full-suite pass, no deleted or renamed tests, and no per-file line-coverage regression for changed production files.
-15. Run tooling from `multi-agent`, but create product-only `fix/<issue>` worktrees from `main`; tooling files and prompts are never mutable repair paths.
-16. After stored passing evidence, push the product branch via SSH, create a ready PR to `main`, wait for GitHub Actions on the PR head SHA, and request an exact-SHA squash merge with `GITHUB_TOKEN`. Failed gates retain branch and artifacts without merge.
+15. Run tooling from `multi-agent`, but create product-only `fix/<issue>` worktrees from current `origin/main`; tooling files and prompts are never mutable repair paths.
+16. Audit retained repair branches read-only against current `origin/main`. Historical branches never bypass namespace, ancestry, product-diff, evidence-SHA, test, verifier, or fresh-live gates.
+17. Preflight `gpt-5.4-mini` through the configured proxy before live work. Retry both harness and product model settings with `gpt-5.5` only when the primary error explicitly says the model is unavailable.
+18. `repair-suite` runs the live eight-case baseline, gives every current failure one fresh repair attempt, refreshes `origin/main` and re-evaluates all eight after each merge, then always records one final eight-case suite.
+19. After stored passing evidence, push the product branch via SSH, create a ready PR to `main`, wait for GitHub Actions on the exact validated PR head SHA, and request an exact-SHA squash merge with `GITHUB_TOKEN`. Failed gates retain branch and artifacts without merge.
 
 ## Consequences
 ### Positive

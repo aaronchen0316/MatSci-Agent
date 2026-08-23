@@ -87,7 +87,8 @@ uv sync --extra dev --extra agents
 ```bash
 uv run matsci-multiagent plan "Eval and repair retrieval quality for current code base"
 uv run matsci-multiagent eval-live
-MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent repair-live --scenario volume
+MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent audit-repairs
+MULTIAGENT_ENABLE_LIVE_MP=1 MULTIAGENT_ENABLE_GIT_WRITE=1 uv run matsci-multiagent repair-suite
 ```
 
 Later, when ready to run real model calls:
@@ -101,4 +102,4 @@ uv run matsci-multiagent run "Eval and repair retrieval quality for current code
 
 `eval-live` is intentionally opt-in. It needs MP and LLM credentials and writes evidence under the ignored artifact root.
 
-Successful `repair-live` runs publish automatically: SSH pushes `fix/<issue>`, GitHub Actions validates the exact PR SHA, then the harness requests a squash merge to `main`. `GITHUB_TOKEN` is only used for GitHub API calls; no token is printed or stored in artifacts.
+All live repairs start from current `origin/main`; no local `main` checkout is modified. `audit-repairs` only records whether retained branches are eligible and never pushes or opens a PR. `repair-suite` is the production loop: it audits legacy branches, runs the eight live cases, repairs each current failure once, then publishes only fresh `fix/<issue>` results with exact-SHA CI evidence. SSH pushes `fix/<issue>`, GitHub Actions validates the exact PR SHA, then the harness requests a squash merge to `main`. `GITHUB_TOKEN` is only used for GitHub API calls; no token is printed or stored in artifacts.
