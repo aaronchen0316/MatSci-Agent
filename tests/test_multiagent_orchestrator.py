@@ -540,6 +540,25 @@ def test_orchestrator_stops_when_debugger_or_verifier_cannot_continue(tmp_path: 
     assert verifier_blocked_report.stop_reason == "verifier_blocked"
 
 
+def test_orchestrator_contains_agent_execution_exception(tmp_path: Path):
+    async def raise_max_turns(_payload):
+        raise RuntimeError("MaxTurnsExceeded")
+
+    harness = _make_harness(
+        tmp_path,
+        tester_results=[_tester_report("fail", "failure", "llm_policy_filter")],
+        critic_results=[_critic_report("agree")],
+    )
+    harness.codex_debugger_runner = raise_max_turns
+
+    report = asyncio.run(harness.run("find formation energy"))
+
+    assert report.status == "blocked"
+    assert report.stop_reason == "debugger_blocked"
+    assert report.latest_debugger_report is not None
+    assert "RuntimeError" in report.latest_debugger_report.change_summary
+
+
 def test_critic_contract_normalizes_contradictory_agreement_and_rejects_missing_block_reason():
     normalized_agreement = MaterialsQueryCriticReport(
         verdict="agree",

@@ -180,7 +180,13 @@ class MultiAgentHarness:
                 scenario_name=scenario.name if scenario else None,
             )
             store.write_model(f"attempts/{attempt_number}/retrieval_tester_input.json", tester_input)
-            tester_report = await self.retrieval_tester_runner(tester_input)
+            try:
+                tester_report = await self.retrieval_tester_runner(tester_input)
+            except Exception as exc:
+                tester_report = RetrievalTesterReport(
+                    status="blocked",
+                    summary=f"Retrieval Tester execution failed: {type(exc).__name__}",
+                )
             if scenario is not None:
                 live_evidence = self.scenario_evaluator(
                     replace(self.settings, repo_root=active_repo_root),
@@ -241,7 +247,14 @@ class MultiAgentHarness:
                 review_evidence=tester_report.live_evaluation,
             )
             store.write_model(f"attempts/{attempt_number}/materials_query_critic_input.json", critic_input)
-            critic_report = await self.materials_query_critic_runner(critic_input)
+            try:
+                critic_report = await self.materials_query_critic_runner(critic_input)
+            except Exception as exc:
+                critic_report = MaterialsQueryCriticReport(
+                    verdict="blocked",
+                    summary=f"Materials Query Critic execution failed: {type(exc).__name__}",
+                    blocked_reason=f"agent execution failed: {type(exc).__name__}",
+                )
             store.write_model(f"attempts/{attempt_number}/materials_query_critic_report.json", critic_report)
             latest_critic = critic_report
             attempt.critic_report = critic_report
@@ -301,7 +314,13 @@ class MultiAgentHarness:
                 existing_worktree_path=worktree_path,
             )
             store.write_model(f"attempts/{attempt_number}/codex_debugger_input.json", debugger_input)
-            debugger_report = await self.codex_debugger_runner(debugger_input)
+            try:
+                debugger_report = await self.codex_debugger_runner(debugger_input)
+            except Exception as exc:
+                debugger_report = CodexDebuggerReport(
+                    status="blocked",
+                    change_summary=f"Codex Debugger execution failed: {type(exc).__name__}",
+                )
             store.write_model(f"attempts/{attempt_number}/codex_debugger_report.json", debugger_report)
             latest_debugger = debugger_report
             branch_name = debugger_report.branch_name or branch_name
@@ -342,7 +361,14 @@ class MultiAgentHarness:
                 repair_test_evidence=repair_test_evidence,
             )
             store.write_model(f"attempts/{attempt_number}/final_verifier_input.json", verifier_input)
-            verifier_report = await self.final_verifier_runner(verifier_input)
+            try:
+                verifier_report = await self.final_verifier_runner(verifier_input)
+            except Exception as exc:
+                verifier_report = FinalVerifierReport(
+                    status="blocked",
+                    summary=f"Final Verifier execution failed: {type(exc).__name__}",
+                    requires_tester_refresh=False,
+                )
             store.write_model(f"attempts/{attempt_number}/final_verifier_report.json", verifier_report)
             latest_verifier = verifier_report
             attempt.verifier_report = verifier_report
