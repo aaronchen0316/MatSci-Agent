@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from matsci_agent.schemas import (
+    DEFAULT_STABILITY_HULL_THRESHOLD,
     StabilityCheckerInput,
     StabilityCheckerOutput,
     StabilityRecord,
@@ -19,6 +20,10 @@ class StabilityChecker:
         mp_count = 0
         unknown_count = 0
 
+        threshold = payload.constraints.max_energy_above_hull
+        if threshold is None:
+            threshold = DEFAULT_STABILITY_HULL_THRESHOLD
+
         for record in payload.predictions:
             mp_energy_above_hull = record.candidate.features.get("mp_energy_above_hull")
             if isinstance(mp_energy_above_hull, (int, float)):
@@ -26,7 +31,7 @@ class StabilityChecker:
                 source = "materials_project"
                 used_relaxation = False
                 method = "materials_project_energy_above_hull"
-                stable = energy_above_hull <= payload.constraints.max_energy_above_hull
+                stable = energy_above_hull <= threshold
                 mp_count += 1
             else:
                 energy_above_hull = None
@@ -58,6 +63,7 @@ class StabilityChecker:
                 "method": self.method,
                 "mp_count": mp_count,
                 "unknown_count": unknown_count,
+                "stability_hull_threshold": threshold,
             },
         )
         return StabilityCheckerOutput(records=records, provenance=provenance)

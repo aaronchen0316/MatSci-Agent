@@ -131,11 +131,7 @@ def _build_request(
         required_elements=required_element or [],
         min_band_gap_ev=min_band_gap_ev,
         calculate_matgl=calculate_matgl,
-        max_energy_above_hull=(
-            max_energy_above_hull
-            if max_energy_above_hull is not None
-            else DiscoveryConstraints().max_energy_above_hull
-        ),
+        max_energy_above_hull=max_energy_above_hull,
         top_k=top_k if top_k is not None else DiscoveryConstraints().top_k,
     )
     return DiscoveryRequest(research_goal=goal, constraints=constraints)

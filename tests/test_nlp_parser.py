@@ -1,4 +1,11 @@
-from matsci_agent.nlp.parser import LLMConstraintParser, merge_constraints
+from matsci_agent.nlp.parser import (
+    PRIMARY_LLM_MODEL,
+    LLMConstraintParser,
+    merge_constraints,
+    resolve_llm_api_key_env,
+    resolve_llm_base_url,
+    resolve_llm_model,
+)
 from matsci_agent.schemas import DiscoveryConstraints
 
 
@@ -22,6 +29,29 @@ def test_llm_parser_maps_structured_output_to_constraints():
     assert parsed.constraints.min_band_gap_ev == 2.0
     assert parsed.constraints.calculate_matgl is True
     assert parsed.constraints.top_k == 7
+    assert parsed.constraints.max_energy_above_hull is None
+
+
+def test_omitted_hull_threshold_remains_unset_through_constraint_merge():
+    parsed = LLMConstraintParser(inference_fn=lambda _goal: {}).parse("find oxides")
+    merged = merge_constraints(DiscoveryConstraints(), parsed.constraints, explicit_base_fields=set())
+
+    assert parsed.constraints.max_energy_above_hull is None
+    assert merged.max_energy_above_hull is None
+
+
+def test_shared_openai_proxy_settings_override_legacy_openrouter_model(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "proxy-key")
+    monkeypatch.setenv("MATSCI_OPENROUTER_MODEL", "legacy-model")
+    monkeypatch.delenv("MATSCI_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("MATSCI_NLP_MODEL", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_MODEL", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+
+    assert resolve_llm_model() == PRIMARY_LLM_MODEL
+    assert resolve_llm_base_url() == "https://proxy.example/v1"
+    assert resolve_llm_api_key_env() == "OPENAI_API_KEY"
 
 
 def test_merge_constraints_preserves_explicit_user_values():

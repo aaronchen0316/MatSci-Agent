@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 import pytest
 
+import matsci_agent.tools.policy_filter as policy_filter_module
 from matsci_agent.schemas import (
     Candidate,
     DiscoveryConstraints,
@@ -82,6 +85,35 @@ def test_policy_filter_payload_uses_source_universe_and_requested_material_class
     assert prompt_payload["discovery_context"]["source_universe"] == "materials_project_entries"
     assert prompt_payload["discovery_context"]["requested_material_class"] == "semiconductor"
     assert "material_class" not in prompt_payload["discovery_context"]
+
+
+def test_policy_filter_payload_includes_generic_mp_summary_properties():
+    tool = PolicyFilter(inference_fn=lambda _payload: {"policy_name": "chemistry_screening", "decisions": []})
+    payload = PolicyFilterInput(
+        candidates=[
+            Candidate(
+                material_id="c1",
+                formula="SrTiO3",
+                features={
+                    "elements": ["Sr", "Ti", "O"],
+                    "formation_energy": -3.55,
+                    "density": 5.1,
+                    "volume": 119.6,
+                    "efermi": 2.3,
+                    "total_magnetization": 0.0,
+                },
+            )
+        ],
+        discovery_plan=_plan("unknown", "unknown", task_class="mp_property_screening"),
+    )
+
+    candidate = tool._prompt_payload(payload)["candidates"][0]
+
+    assert candidate["formation_energy"] == -3.55
+    assert candidate["density"] == 5.1
+    assert candidate["volume"] == 119.6
+    assert candidate["efermi"] == 2.3
+    assert candidate["total_magnetization"] == 0.0
 
 
 def test_policy_filter_prompt_references_materials_project_entries():
@@ -243,3 +275,33 @@ def test_policy_filter_remote_failure_fails_closed(monkeypatch):
         tool.run(payload)
 
     assert exc_info.value.code == "policy_filter_invalid_json"
+
+
+def test_policy_filter_retries_transient_timeout_with_backoff(monkeypatch):
+    tool = PolicyFilter(provider="openrouter")
+    payload = PolicyFilterInput(
+        candidates=[Candidate(material_id="c1", formula="AlN", features={"elements": ["Al", "N"]})],
+        discovery_plan=_plan("unknown", "unknown", task_class="mp_property_screening"),
+    )
+    calls = 0
+    sleeps: list[float] = []
+
+    def request(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("request timed out")
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"decisions":[{"material_id":"c1","keep":true,"reasons":[]}]}'))]
+        )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "test-key")
+    monkeypatch.setattr(tool, "_request_openrouter_completion", request)
+    monkeypatch.setattr(policy_filter_module.time, "sleep", sleeps.append)
+
+    out = tool.run(payload)
+
+    assert [candidate.material_id for candidate in out.filtered_candidates] == ["c1"]
+    assert calls == 2
+    assert sleeps == [1.0]
+    assert out.provenance.output_summary["request_attempt_count"] == 2

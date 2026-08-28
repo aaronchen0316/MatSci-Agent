@@ -11,6 +11,7 @@ from matsci_agent.config import settings
 from matsci_agent.guardrails.capability import CapabilityGuardrail
 from matsci_agent.observability.mlflow_logger import MLflowLogger
 from matsci_agent.schemas import (
+    DEFAULT_STABILITY_HULL_THRESHOLD,
     Candidate,
     CapabilityAssessment,
     DiscoveryFullResponse,
@@ -448,6 +449,9 @@ class DiscoveryWorkflow:
             for candidate in state.get("filtered_candidates", state.get("raw_candidates", []))
         ]
         ranked: list[RankedCandidate] = []
+        stability_threshold = state["constraints"].max_energy_above_hull
+        if stability_threshold is None:
+            stability_threshold = DEFAULT_STABILITY_HULL_THRESHOLD
         for candidate in sorted(candidates, key=self._mp_property_sort_key):
             properties = self._candidate_properties(candidate)
             candidate.features["properties"] = properties
@@ -455,7 +459,7 @@ class DiscoveryWorkflow:
             stability = StabilityResult(
                 energy_above_hull=float(hull) if isinstance(hull, (int, float)) else None,
                 is_stable=(
-                    float(hull) <= state["constraints"].max_energy_above_hull
+                    float(hull) <= stability_threshold
                     if isinstance(hull, (int, float))
                     else None
                 ),
@@ -593,9 +597,9 @@ class DiscoveryWorkflow:
 
     def _refine(self, state: DiscoveryState) -> DiscoveryState:
         constraints = state["constraints"].model_copy(deep=True)
-        constraints.max_energy_above_hull = min(
-            constraints.max_energy_above_hull + 0.03, 0.3
-        )
+        previous_threshold = constraints.max_energy_above_hull
+        if previous_threshold is not None:
+            constraints.max_energy_above_hull = min(previous_threshold + 0.03, 0.3)
         if isinstance(state.get("discovery_plan"), DiscoveryPlan):
             plan = state["discovery_plan"].model_copy(deep=True)
             plan.parsed_constraints = constraints
@@ -603,9 +607,14 @@ class DiscoveryWorkflow:
             plan = None
         iteration = state["iteration"] + 1
         messages = state.get("messages", [])
-        messages.append(
-            f"No stable candidates at iteration {state['iteration']}; relaxed max_energy_above_hull to {constraints.max_energy_above_hull:.2f}."
-        )
+        if constraints.max_energy_above_hull is None:
+            messages.append(
+                f"No stable candidates at iteration {state['iteration']}; no explicit max_energy_above_hull constraint to relax."
+            )
+        else:
+            messages.append(
+                f"No stable candidates at iteration {state['iteration']}; relaxed max_energy_above_hull to {constraints.max_energy_above_hull:.2f}."
+            )
         self.logger.log_step(
             "refine",
             metrics={

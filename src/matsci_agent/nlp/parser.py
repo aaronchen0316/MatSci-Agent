@@ -11,7 +11,8 @@ from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPF
 
 logger = logging.getLogger(__name__)
 _DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-_DEFAULT_OPENROUTER_MODEL = "openai/gpt-oss-120b:free"
+PRIMARY_LLM_MODEL = "gpt-5.4-mini"
+FALLBACK_LLM_MODEL = "gpt-5.5"
 _ELEMENT_NAME_TO_SYMBOL = {
     "hydrogen": "H", "helium": "He", "lithium": "Li", "beryllium": "Be", "boron": "B", "carbon": "C",
     "nitrogen": "N", "oxygen": "O", "fluorine": "F", "neon": "Ne", "sodium": "Na", "magnesium": "Mg",
@@ -52,19 +53,24 @@ def resolve_llm_model(explicit_model: str | None = None) -> str:
         explicit_model
         or os.getenv("MATSCI_NLP_MODEL")
         or os.getenv("MATSCI_LLM_MODEL")
-        or os.getenv("MATSCI_OPENROUTER_MODEL")
-        or _DEFAULT_OPENROUTER_MODEL
+        or PRIMARY_LLM_MODEL
     )
 
 
 def resolve_llm_base_url() -> str:
-    return os.getenv("MATSCI_LLM_BASE_URL", _DEFAULT_OPENROUTER_BASE_URL)
+    return (
+        os.getenv("MATSCI_LLM_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or _DEFAULT_OPENROUTER_BASE_URL
+    )
 
 
 def resolve_llm_api_key_env() -> str:
     configured = os.getenv("MATSCI_LLM_API_KEY_ENV", "").strip()
     if configured:
         return configured
+    if os.getenv("OPENAI_BASE_URL") and os.getenv("OPENAI_API_KEY"):
+        return "OPENAI_API_KEY"
     if os.getenv("OPENROUTER_API_KEY_RAG"):
         return "OPENROUTER_API_KEY_RAG"
     return "OPENROUTER_API_KEY"
@@ -78,6 +84,14 @@ def resolve_llm_api_key() -> tuple[str | None, str]:
     if env_name != "OPENROUTER_API_KEY" and os.getenv("OPENROUTER_API_KEY"):
         return os.getenv("OPENROUTER_API_KEY"), "OPENROUTER_API_KEY"
     return None, env_name
+
+
+def is_unavailable_model_error(exc: Exception | str) -> bool:
+    text = str(exc).lower()
+    return "model" in text and any(
+        marker in text
+        for marker in ("unavailable", "not available", "not found", "does not exist", "model_not_found")
+    )
 
 
 class LLMConstraintParser:
@@ -556,7 +570,7 @@ class LLMConstraintParser:
                 required_elements=required_elements,
                 min_band_gap_ev=min_gap,
                 calculate_matgl=self._coerce_bool(raw.get("calculate_matgl"), default=False),
-                max_energy_above_hull=max_hull if max_hull is not None else defaults.max_energy_above_hull,
+                max_energy_above_hull=max_hull,
                 top_k=parsed_top_k if parsed_top_k is not None else defaults.top_k,
                 mp_filters=mp_filters,
             ),
@@ -611,9 +625,8 @@ def merge_constraints(
         merged.calculate_matgl = merged.calculate_matgl or parsed.calculate_matgl
     if "top_k" not in explicit and parsed.top_k != defaults.top_k:
         merged.top_k = parsed.top_k
-    if "max_energy_above_hull" not in explicit and merged.max_energy_above_hull == defaults.max_energy_above_hull:
-        if parsed.max_energy_above_hull != defaults.max_energy_above_hull:
-            merged.max_energy_above_hull = parsed.max_energy_above_hull
+    if "max_energy_above_hull" not in explicit and parsed.max_energy_above_hull is not None:
+        merged.max_energy_above_hull = parsed.max_energy_above_hull
 
     merged_filters = merged.mp_filters.model_copy(deep=True)
     parsed_filters = parsed.mp_filters
