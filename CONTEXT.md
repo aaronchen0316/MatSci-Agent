@@ -167,7 +167,7 @@ Legacy compatibility aliases still exist:
 - top-level `banned_elements` -> MP `exclude_elements`
 - top-level `required_elements` -> MP `elements`
 - top-level `min_band_gap_ev` -> lower bound of MP `band_gap`
-- top-level `max_energy_above_hull` -> upper bound of MP `energy_above_hull`
+- top-level `max_energy_above_hull` -> upper bound of MP `energy_above_hull` when explicitly supplied; omitted requests do not receive an implicit retrieval filter
 
 ### Duplicate Formula Entry
 Retrieval-level collapse rule for Materials Project candidates sharing the same exact `formula_pretty`.
