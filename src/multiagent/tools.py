@@ -217,7 +217,7 @@ def _run_scoped_live_evaluation(settings: MultiAgentSettings, payload: LiveEvalI
         result = subprocess.run(
             [sys.executable, "-m", "multiagent.scoped_evaluator"],
             cwd=str(settings.resolved_target_root),
-            input=payload.model_dump_json(),
+            input=payload.model_dump_json(exclude_none=True),
             capture_output=True,
             text=True,
             check=False,

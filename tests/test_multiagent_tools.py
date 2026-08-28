@@ -8,6 +8,7 @@ import multiagent.tools as harness_tools
 from multiagent.schemas import LiveEvalEvidence, LiveEvalInput
 from multiagent.settings import MultiAgentSettings
 from multiagent.tools import build_tool_groups, cleanup_worktree, create_target_base_worktree
+from matsci_agent.schemas import DiscoveryConstraints
 
 
 class FakeSDK:
@@ -330,7 +331,14 @@ def test_scoped_live_evaluator_executes_from_active_target_root(monkeypatch, tmp
 
     monkeypatch.setattr(harness_tools.subprocess, "run", fake_run)
 
-    result = harness_tools._run_scoped_live_evaluation(settings, LiveEvalInput(query="find oxides", allow_live_mp=True))
+    result = harness_tools._run_scoped_live_evaluation(
+        settings,
+        LiveEvalInput(
+            query="find oxides",
+            constraints=DiscoveryConstraints(),
+            allow_live_mp=True,
+        ),
+    )
 
     assert result == expected
     assert observed["args"] == [harness_tools.sys.executable, "-m", "multiagent.scoped_evaluator"]
@@ -340,6 +348,7 @@ def test_scoped_live_evaluator_executes_from_active_target_root(monkeypatch, tmp
         str((tool_root / "src").resolve()),
     ]
     assert '"allow_live_mp":true' in str(observed["input"])
+    assert '"max_energy_above_hull"' not in str(observed["input"])
 
 
 def test_target_base_worktree_comes_from_configured_product_branch(tmp_path: Path):
