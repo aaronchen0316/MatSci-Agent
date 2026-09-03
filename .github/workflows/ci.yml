@@ -1,0 +1,17 @@
+name: Product CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - multi-agent
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - run: uv run pytest -q
