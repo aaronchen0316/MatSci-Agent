@@ -69,6 +69,20 @@ def test_mock_candidates_include_energy_above_hull_feature():
     assert "mp_energy_above_hull" in out.candidates[0].features
 
 
+def test_effective_filters_only_apply_hull_threshold_when_explicit():
+    retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
+
+    omitted = retriever._effective_filters(DiscoveryConstraints(), "Find materials")
+    explicit = retriever._effective_filters(
+        DiscoveryConstraints(max_energy_above_hull=0.05),
+        "Find materials with energy above hull below 0.05 eV",
+    )
+
+    assert omitted.energy_above_hull is None
+    assert explicit.energy_above_hull is not None
+    assert explicit.energy_above_hull.max == 0.05
+
+
 def test_mock_retriever_honors_excluded_material_ids_and_limit_override():
     retriever = MPRetriever(MPRetrieverConfig(use_live_if_available=False))
     payload = MPRetrieverInput(

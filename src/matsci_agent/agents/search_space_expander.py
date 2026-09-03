@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
 from matsci_agent.nlp.parser import (
+    FALLBACK_LLM_MODEL,
+    PRIMARY_LLM_MODEL,
     _ELEMENT_NAME_TO_SYMBOL,
+    is_unavailable_model_error,
     normalize_llm_provider,
     resolve_llm_api_key,
     resolve_llm_base_url,
@@ -23,6 +27,8 @@ from matsci_agent.schemas import (
 _MAX_RESPONSE_TOKENS = 1800
 _TIMEOUT_SECS = 30.0
 _MAX_EXPANSION_ATTEMPTS = 3
+_MAX_REQUEST_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 _SUBSCRIPT_DIGITS = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
 _VALID_ELEMENTS = set(_ELEMENT_NAME_TO_SYMBOL.values())
 _FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
@@ -47,6 +53,8 @@ class SearchSpaceExpansionAgent:
         self.model = resolve_llm_model(model)
         self.inference_fn = inference_fn
         self.last_response_preview = ""
+        self.request_attempt_count = 0
+        self.selected_model = self.model
 
     def expand(self, payload: SearchSpaceExpansionInput) -> SearchSpaceExpansionOutput:
         last_error: SearchSpaceExpansionError | None = None
@@ -66,7 +74,8 @@ class SearchSpaceExpansionAgent:
                     input_payload=self._prompt_payload(payload),
                     output_summary={
                         "provider": self.provider,
-                        "model": self.model,
+                        "model": self.selected_model,
+                        "request_attempt_count": self.request_attempt_count,
                         "target_count": len(targets),
                         "raw_response_preview": self.last_response_preview,
                     },
@@ -89,6 +98,8 @@ class SearchSpaceExpansionAgent:
 
     def _call_llm(self, payload: SearchSpaceExpansionInput, previous_error: str | None = None) -> dict[str, Any]:
         self.last_response_preview = ""
+        self.request_attempt_count = 0
+        self.selected_model = self.model
         prompt_payload = self._prompt_payload(payload, previous_error=previous_error)
         if self.inference_fn is not None:
             result = self.inference_fn(prompt_payload)
@@ -114,7 +125,7 @@ class SearchSpaceExpansionAgent:
         if not api_key:
             raise SearchSpaceExpansionError(
                 "search_space_expansion_request_failed",
-                f"OpenRouter credentials missing: {api_key_env}.",
+                f"OpenAI-compatible credentials missing: {api_key_env}.",
             )
         try:
             from openai import OpenAI
@@ -126,27 +137,65 @@ class SearchSpaceExpansionAgent:
 
         client = OpenAI(api_key=api_key, base_url=resolve_llm_base_url(), timeout=_TIMEOUT_SECS)
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                temperature=0,
-                max_tokens=_MAX_RESPONSE_TOKENS,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": self._system_prompt()},
-                    {"role": "user", "content": json.dumps(prompt_payload)},
-                ],
+            return self._request_model(client, prompt_payload, self.model)
+        except SearchSpaceExpansionError as exc:
+            if self.model != PRIMARY_LLM_MODEL or not is_unavailable_model_error(exc):
+                raise
+            return self._request_model(client, prompt_payload, FALLBACK_LLM_MODEL)
+        finally:
+            client.close()
+
+    def _request_model(self, client: Any, prompt_payload: dict[str, Any], model: str) -> dict[str, Any]:
+        self.selected_model = model
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
+            self.request_attempt_count += 1
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    temperature=0,
+                    max_tokens=_MAX_RESPONSE_TOKENS,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": self._system_prompt()},
+                        {"role": "user", "content": json.dumps(prompt_payload)},
+                    ],
+                )
+                content = response.choices[0].message.content or "{}"
+                self.last_response_preview = content[:500]
+                return self._parse_json(content)
+            except SearchSpaceExpansionError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if not self._is_transient_request_error(exc) or attempt == _MAX_REQUEST_ATTEMPTS:
+                    break
+                time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+        assert last_error is not None
+        raise SearchSpaceExpansionError(
+            "search_space_expansion_request_failed",
+            f"Search-space expansion OpenAI-compatible request failed: {last_error}",
+            self.last_response_preview,
+        ) from last_error
+
+    @staticmethod
+    def _is_transient_request_error(exc: Exception) -> bool:
+        name = type(exc).__name__.lower()
+        text = str(exc).lower()
+        return "timeout" in name or any(
+            marker in text
+            for marker in (
+                "timed out",
+                "timeout",
+                "connection",
+                "temporarily unavailable",
+                "rate limit",
+                "429",
+                "502",
+                "503",
+                "504",
             )
-            content = response.choices[0].message.content or "{}"
-            self.last_response_preview = content[:500]
-            return self._parse_json(content)
-        except SearchSpaceExpansionError:
-            raise
-        except Exception as exc:
-            raise SearchSpaceExpansionError(
-                "search_space_expansion_request_failed",
-                f"Search-space expansion OpenRouter request failed: {exc}",
-                self.last_response_preview,
-            ) from exc
+        )
 
     @staticmethod
     def _parse_json(content: str) -> dict[str, Any]:

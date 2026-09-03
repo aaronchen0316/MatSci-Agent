@@ -7,6 +7,7 @@ MatSci-Agent is an agentic materials-screening system for Materials Project entr
 - Public entrypoint: `POST /discover`
 - Debug trace entrypoint: `POST /discover/full`
 - Orchestration: LangGraph workflow
+- Experimental retrieval-repair orchestration: external multi-agent harness may supervise the workflow, but should not replace deterministic shortlist execution inside `DiscoveryWorkflow`; human-readable agent specs live under `agent_specs/`
 - Retrieval source: Materials Project
 - Primary target properties: MP summary fields such as `band_gap`, `formation_energy`, `energy_above_hull`, `density`, and `volume`
 - Property policy: MP retrieval and policy filtering decide shortlist membership; optional MatGL recalculation runs only on finalized band-gap shortlist rows and affects final ranking/display, not membership
@@ -74,6 +75,27 @@ This layer should remain typed, reproducible, and testable.
 
 ### Reporting Agent
 Deterministic summarization layer that explains results or refusals after deterministic execution is complete. It should not modify candidate selection or scoring.
+
+### Retrieval Repair Harness
+An external multi-agent supervision layer for evaluating and improving retrieval quality.
+
+Expected behavior:
+- runs outside `DiscoveryWorkflow`
+- Python assigns specialist work in fixed order: Retrieval Tester -> Materials Query Critic -> Codex Debugger -> Final Verifier
+- Dual Review is final scientific success gate: Retrieval Tester pass plus Materials Query Critic agreement over real MP evidence
+- Final Verifier is patch-acceptance gate; accepted patches always receive a fresh Tester + Critic cycle
+- no Controller Agent exists; Python owns scheduling, retry budget, and terminal state
+- uses `POST /discover/full` or equivalent local trace surface as evidence
+- treats retrieval quality as staged failures such as intent parse, Search Space Expansion, retrieval, Policy Filter, and final ranking
+- may open isolated git branches/worktrees for debugger changes
+- records non-secret run artifacts; removes clean temporary worktrees while retaining repair branches
+- re-runs accepted repair validation from the repair worktree source, not the parent checkout
+- exposes fixed eight-scenario `validate` and `validate-repair` commands; repair binds each failed scenario internally and enforces deterministic test and per-file coverage gates before publication
+- may adopt an explicitly named retained `fix/<issue>` branch only with matching stored evidence, then requires fresh verifier and live proof before publication
+- runs from tooling branch `multi-agent` against detached product `main` worktrees; debugger may create only product-only `fix/<issue>` branches
+- requires `multi-agent` to contain current `origin/main` and no unforwarded product-path changes before validation; after every successful repair merge, directly merge `origin/main` into `multi-agent`, resolve conflicts, test, and push
+- after every repair gate passes, pushes via SSH, opens a ready PR to `main`, waits for `Product CI / test` on exact PR SHA, then requests squash merge through GitHub API; failures retain branch/artifacts without merge
+- should preserve the existing deterministic shortlist pipeline as source of truth
 
 ### Task Registry
 A finite canonical registry of supported and unsupported task classes. This is the preferred guardrail mechanism because it is easier to audit, update, and test than free-form LLM capability judgments.
@@ -146,7 +168,7 @@ Legacy compatibility aliases still exist:
 - top-level `banned_elements` -> MP `exclude_elements`
 - top-level `required_elements` -> MP `elements`
 - top-level `min_band_gap_ev` -> lower bound of MP `band_gap`
-- top-level `max_energy_above_hull` -> upper bound of MP `energy_above_hull`
+- top-level `max_energy_above_hull` -> upper bound of MP `energy_above_hull` when explicitly supplied; omitted requests do not receive an implicit retrieval filter
 
 ### Duplicate Formula Entry
 Retrieval-level collapse rule for Materials Project candidates sharing the same exact `formula_pretty`.
