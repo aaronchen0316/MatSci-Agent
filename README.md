@@ -77,7 +77,8 @@ The search-space expander:
 - runs before retrieval for supported screening requests
 - returns bounded formula targets with normalized formula, `chemsys`, confidence, and rationale
 - defaults to `min(max(top_k * 3, top_k), 30)` targets
-- fails closed if OpenRouter is unavailable or no valid MP-compatible formula targets remain
+- uses the shared OpenAI-compatible product client with `gpt-5.4-mini`; an explicit unavailable-model error alone falls back to `gpt-5.5`
+- retries transient remote failures up to three total attempts, then fails closed if no valid MP-compatible formula targets remain
 - appears in `/discover/full` as `search_space_targets` plus provenance
 
 The chemistry filter:
@@ -85,6 +86,7 @@ The chemistry filter:
 - is enabled by default after retrieval
 - uses one policy name: `chemistry_screening`
 - sees `source_universe` and parser-derived `requested_material_class` in its discovery context
+- receives retrieved generic MP summary values, including formation energy, density, and volume
 - fails closed when no remote LLM provider credentials are available
 - fails closed on timeout, invalid JSON, or incomplete candidate decisions
 - always rejects candidates containing impractical/radioactive elements
@@ -95,7 +97,9 @@ The chemistry filter:
 - `banned_elements` -> `exclude_elements`
 - `required_elements` -> `elements`
 - `min_band_gap_ev` -> `mp_filters.band_gap.min`
-- `max_energy_above_hull` -> `mp_filters.energy_above_hull.max`
+- `max_energy_above_hull` -> `mp_filters.energy_above_hull.max` when explicitly supplied
+
+When omitted, `max_energy_above_hull` is `null`: it does not narrow Materials Project retrieval. The default `0.1 eV/atom` threshold remains only for stability annotation.
 
 `POST /discover` candidate summaries include:
 - `material_id`

@@ -6,6 +6,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+DEFAULT_STABILITY_HULL_THRESHOLD = 0.1
+
+
 class FloatRange(BaseModel):
     min: float | None = None
     max: float | None = None
@@ -49,7 +52,7 @@ class DiscoveryConstraints(BaseModel):
     required_elements: list[str] = Field(default_factory=list)
     min_band_gap_ev: float | None = Field(default=None, ge=0)
     calculate_matgl: bool = False
-    max_energy_above_hull: float = Field(default=0.1, ge=0)
+    max_energy_above_hull: float | None = Field(default=None, ge=0)
     top_k: int = Field(default=5, ge=1, le=100)
     mp_filters: MPFilters = Field(default_factory=MPFilters)
 

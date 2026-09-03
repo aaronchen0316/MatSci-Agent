@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -28,7 +29,8 @@ _MAX_REASONS = 3
 _MAX_REASON_CHARS = 160
 _MAX_RESPONSE_TOKENS = 800
 _TIMEOUT_SECS = 20.0
-_MAX_OPENROUTER_ATTEMPTS = 3
+_MAX_REQUEST_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 _IM_PRACTICAL_ELEMENTS = {
     "ac",
     "am",
@@ -71,6 +73,7 @@ class PolicyFilter:
         self.model = resolve_llm_model(model)
         self.inference_fn = inference_fn
         self.last_response_preview: str = ""
+        self.request_attempt_count = 0
 
     def skip(self, payload: PolicyFilterInput, policy: str) -> PolicyFilterOutput:
         records: list[PolicyFilterRecord] = []
@@ -146,12 +149,14 @@ class PolicyFilter:
                 "filtered_count": len(filtered),
                 "excluded_count": len(payload.candidates) - len(filtered),
                 "raw_response_preview": self.last_response_preview,
+                "request_attempt_count": self.request_attempt_count,
             },
         )
         return PolicyFilterOutput(filtered_candidates=filtered, records=records, provenance=provenance)
 
     def _call_llm(self, payload: PolicyFilterInput) -> dict[str, Any]:
         self.last_response_preview = ""
+        self.request_attempt_count = 0
         if self.inference_fn is not None:
             result = self.inference_fn(self._prompt_payload(payload))
             if isinstance(result, str):
@@ -176,34 +181,34 @@ class PolicyFilter:
             raise PolicyFilterError("policy_filter_llm_request_failed", f"OpenAI client import failed: {exc}") from exc
 
         client = OpenAI(api_key=api_key, base_url=resolve_llm_base_url(), timeout=_TIMEOUT_SECS)
-        last_error: PolicyFilterError | None = None
-        for attempt in range(1, _MAX_OPENROUTER_ATTEMPTS + 1):
-            use_response_format = attempt == 1
-            try:
-                response = self._request_openrouter_completion(
-                    client=client,
-                    payload=payload,
-                    use_response_format=use_response_format,
-                )
+        last_error: Exception | None = None
+        try:
+            for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
+                self.request_attempt_count += 1
+                try:
+                    response = self._request_openrouter_completion(
+                        client=client,
+                        payload=payload,
+                        use_response_format=attempt == 1,
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    if not self._is_transient_request_error(exc) or attempt == _MAX_REQUEST_ATTEMPTS:
+                        break
+                    time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+                    continue
                 content = self._extract_completion_content(response)
                 self.last_response_preview = content[:500]
                 return self._parse_response_json(content)
-            except PolicyFilterError as exc:
-                last_error = exc
-                if exc.code == "policy_filter_timeout":
-                    break
-            except Exception as exc:
-                code = "policy_filter_timeout" if self._is_timeout_exc(exc) else "policy_filter_llm_request_failed"
-                last_error = PolicyFilterError(
-                    code,
-                    f"Policy filter OpenRouter request failed: {exc}",
-                    self.last_response_preview,
-                )
-                if code == "policy_filter_timeout":
-                    break
-        if last_error is not None:
-            raise last_error
-        raise PolicyFilterError("policy_filter_llm_request_failed", "Policy filter OpenRouter request failed.")
+        finally:
+            client.close()
+        assert last_error is not None
+        code = "policy_filter_timeout" if self._is_timeout_exc(last_error) else "policy_filter_llm_request_failed"
+        raise PolicyFilterError(
+            code,
+            f"Policy filter OpenAI-compatible request failed: {last_error}",
+            self.last_response_preview,
+        ) from last_error
 
     def _request_openrouter_completion(
         self,
@@ -323,6 +328,11 @@ class PolicyFilter:
             "elements": [str(token) for token in elements],
             "mp_band_gap_ev": candidate.features.get("mp_band_gap_ev"),
             "mp_energy_above_hull": candidate.features.get("mp_energy_above_hull"),
+            "formation_energy": candidate.features.get("formation_energy"),
+            "density": candidate.features.get("density"),
+            "volume": candidate.features.get("volume"),
+            "efermi": candidate.features.get("efermi"),
+            "total_magnetization": candidate.features.get("total_magnetization"),
             "nsites": candidate.features.get("nsites"),
             "is_metal": candidate.features.get("is_metal"),
             "theoretical": candidate.features.get("theoretical"),
@@ -377,3 +387,19 @@ class PolicyFilter:
         name = type(exc).__name__.lower()
         text = str(exc).lower()
         return "timeout" in name or "timed out" in text or "timeout" in text
+
+    @classmethod
+    def _is_transient_request_error(cls, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return cls._is_timeout_exc(exc) or any(
+            marker in text
+            for marker in (
+                "connection",
+                "temporarily unavailable",
+                "rate limit",
+                "429",
+                "502",
+                "503",
+                "504",
+            )
+        )
