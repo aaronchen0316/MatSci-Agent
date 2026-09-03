@@ -29,7 +29,11 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _settings(repo: Path, tmp_path: Path) -> MultiAgentSettings:
-    return MultiAgentSettings(tool_root=repo, target_repo=repo, target_base_branch="multi-agent", worktree_root=tmp_path / "worktrees")
+    return MultiAgentSettings(tool_root=repo, target_repo=repo, target_base_branch="multi-agent", worktree_root=tmp_path)
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def test_repair_validation_rejects_deleted_or_renamed_tests(tmp_path: Path):
@@ -42,6 +46,8 @@ def test_repair_validation_rejects_deleted_or_renamed_tests(tmp_path: Path):
     evidence = validate_repair_test_evidence(
         _settings(repo, tmp_path),
         repo,
+        branch_name="retrieval-fix-1",
+        commit_sha=_head(repo),
         declared_test_files=[],
         declared_test_targets=[],
     )
@@ -61,6 +67,8 @@ def test_repair_validation_rejects_malformed_or_duplicate_test_targets(tmp_path:
     evidence = validate_repair_test_evidence(
         _settings(repo, tmp_path),
         repo,
+        branch_name="retrieval-fix-1",
+        commit_sha=_head(repo),
         declared_test_files=["tests/test_module.py"],
         declared_test_targets=["tests/test_module.py", "tests/test_module.py"],
     )
@@ -104,6 +112,8 @@ def test_repair_validation_rejects_per_file_coverage_regression(monkeypatch, tmp
     evidence = validate_repair_test_evidence(
         _settings(repo, tmp_path),
         repo,
+        branch_name="retrieval-fix-1",
+        commit_sha=_head(repo),
         declared_test_files=["tests/test_module.py"],
         declared_test_targets=["tests/test_module.py"],
     )
@@ -112,6 +122,22 @@ def test_repair_validation_rejects_per_file_coverage_regression(monkeypatch, tmp
     assert evidence.coverage_regressions == ["src/matsci_agent/module.py: 90.00% -> 80.00%"]
     assert "changed production-file coverage decreased" in evidence.issues
     assert any(command[:2] == ["--collect-only", "-q"] for command in pytest_commands)
+
+
+def test_repair_validation_blocks_mismatched_worktree_identity(tmp_path: Path):
+    repo = _repo(tmp_path)
+
+    evidence = validate_repair_test_evidence(
+        _settings(repo, tmp_path),
+        repo,
+        branch_name="fix/wrong-branch",
+        commit_sha=_head(repo),
+        declared_test_files=[],
+        declared_test_targets=[],
+    )
+
+    assert evidence.status == "blocked"
+    assert evidence.issues == ["worktree branch does not match debugger report"]
 
 
 def test_repair_validation_uses_tooling_dev_dependencies_and_target_source(monkeypatch, tmp_path: Path):

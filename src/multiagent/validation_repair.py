@@ -23,6 +23,15 @@ from multiagent.schemas import (
 from multiagent.settings import MultiAgentSettings
 from multiagent.tools import cleanup_worktree, create_target_base_worktree
 
+_CONTROL_BRANCH = "multi-agent"
+_PRODUCT_PATHS = (
+    "src/matsci_agent",
+    "tests",
+    "README.md",
+    "CONTEXT.md",
+    ":(exclude)tests/test_multiagent_*.py",
+)
+
 
 @dataclass(frozen=True)
 class _AdoptionContext:
@@ -46,39 +55,35 @@ def validation_repair_prerequisite_error(settings: MultiAgentSettings) -> str | 
         return "MULTIAGENT_ENABLE_LIVE_MP=1 is required"
     if not settings.enable_git_write:
         return "MULTIAGENT_ENABLE_GIT_WRITE=1 is required"
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(settings.resolved_tool_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if status.returncode != 0 or status.stdout.strip():
-        return "tooling checkout must be clean before validation-repair"
-    return refresh_target_base(settings)
+    return prepare_control_baseline(settings)
 
 
-def refresh_target_base(settings: MultiAgentSettings) -> str | None:
-    """Refresh the remote product baseline used by every isolated evaluation."""
+def prepare_control_baseline(settings: MultiAgentSettings) -> str | None:
+    """Refresh and verify the synchronized product/control baseline."""
 
-    fetched = subprocess.run(
-        ["git", "fetch", "origin", settings.target_base_branch],
-        cwd=str(settings.resolved_target_repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if fetched.returncode != 0:
-        return f"unable to refresh {settings.target_base_ref}"
-    remote = subprocess.run(
-        ["git", "rev-parse", "--verify", settings.target_base_ref],
-        cwd=str(settings.resolved_target_repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if remote.returncode != 0 or not remote.stdout.strip():
+    target_root = settings.resolved_target_repo
+    tool_root = settings.resolved_tool_root
+    for root in {target_root, tool_root}:
+        fetched = _run(["git", "fetch", "origin", settings.target_base_branch], root)
+        if fetched.returncode != 0:
+            return f"unable to refresh {settings.target_base_ref}"
+    target_base = _run(["git", "rev-parse", "--verify", settings.target_base_ref], target_root)
+    tool_base = _run(["git", "rev-parse", "--verify", settings.target_base_ref], tool_root)
+    if target_base.returncode != 0 or tool_base.returncode != 0 or not target_base.stdout.strip() or not tool_base.stdout.strip():
         return f"base branch does not exist: {settings.target_base_ref}"
+    if target_base.stdout.strip() != tool_base.stdout.strip():
+        return "tooling checkout target base does not match product checkout"
+    if _output(_run(["git", "branch", "--show-current"], tool_root)) != _CONTROL_BRANCH:
+        return f"tooling checkout must be on {_CONTROL_BRANCH}"
+    if _output(_run(["git", "status", "--porcelain"], tool_root)):
+        return "tooling checkout must be clean before validation"
+    if _run(["git", "merge-base", "--is-ancestor", settings.target_base_ref, "HEAD"], tool_root).returncode != 0:
+        return f"{_CONTROL_BRANCH} must merge {settings.target_base_ref} before validation"
+    product_diff = _run(["git", "diff", "--quiet", f"{settings.target_base_ref}...HEAD", "--", *_PRODUCT_PATHS], tool_root)
+    if product_diff.returncode == 1:
+        return f"forward-port product changes from {_CONTROL_BRANCH} to {settings.target_base_ref} before validation"
+    if product_diff.returncode != 0:
+        return "unable to compare product changes between control and target branches"
     return None
 
 
@@ -309,7 +314,7 @@ def run_validation_repair(
     evaluator: Callable[[MultiAgentSettings], LiveEvalSuiteReport] = run_live_validation,
     repair_runner: Callable[[MultiAgentSettings, LiveEvalScenario], tuple[HarnessRunReport, PullRequestPublication | None]] = run_scenario_repair,
     adoption_runner: Callable[[MultiAgentSettings, str], AdoptedBranchAttempt] = run_adopted_branch_repair,
-    base_refresher: Callable[[MultiAgentSettings], str | None] = refresh_target_base,
+    base_refresher: Callable[[MultiAgentSettings], str | None] = prepare_control_baseline,
     adopt_branches: list[str] | None = None,
 ) -> ValidationRepairReport:
     """Validate eight live scenarios, repair each failure once, then revalidate."""
@@ -323,7 +328,7 @@ def run_validation_repair(
     attempts: list[ValidationRepairAttempt] = []
     current = baseline
     attempted: set[str] = set()
-    refresh_error: str | None = None
+    baseline_error: str | None = None
 
     for branch_name in adopt_branches or []:
         adopted = adoption_runner(settings, branch_name)
@@ -332,13 +337,13 @@ def run_validation_repair(
         if adopted.scenario_name:
             attempted.add(adopted.scenario_name)
         if adopted.status == "merged":
-            refresh_error = base_refresher(settings)
-            if refresh_error is not None:
+            baseline_error = base_refresher(settings)
+            if baseline_error is not None:
                 break
             current = evaluator(settings)
             store.write_model(f"adopted_retests/{len(adopted_branches)}_validation.json", current)
 
-    while refresh_error is None:
+    while baseline_error is None:
         pending = [scenario for scenario in _failed_scenarios(current) if scenario.name not in attempted]
         if not pending:
             break
@@ -354,18 +359,18 @@ def run_validation_repair(
         attempts.append(attempt)
         store.write_model(f"attempts/{len(attempts)}/{scenario.name}.json", attempt)
         if publication is not None and publication.status == "merged":
-            refresh_error = base_refresher(settings)
-            if refresh_error is not None:
+            baseline_error = base_refresher(settings)
+            if baseline_error is not None:
                 break
             current = evaluator(settings)
             store.write_model(f"retests/{len(attempts)}_validation.json", current)
 
     final = evaluator(settings)
     store.write_model("final_validation.json", final)
-    status = "fail" if refresh_error else _validation_status(final)
+    status = "blocked" if baseline_error else _validation_status(final)
     summary = (
-        refresh_error
-        if refresh_error
+        baseline_error
+        if baseline_error
         else "all eight live scenarios passed"
         if status == "pass"
         else "one or more live scenarios remain failed or blocked"

@@ -15,6 +15,7 @@ from multiagent.settings import MultiAgentSettings
 
 _BRANCH_SEGMENT = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SUCCESSFUL_CHECKS = {"success", "neutral", "skipped"}
+_REQUIRED_CHECK_NAME = "Product CI / test"
 
 
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -173,9 +174,19 @@ def _wait_for_checks(*, repository: str, token: str, sha: str, timeout_seconds: 
             token=token,
         )
         checks = list(result.get("check_runs") or [])
-        if checks and all(check.get("status") == "completed" for check in checks):
-            conclusions = {str(check.get("conclusion")) for check in checks}
-            return "pass" if conclusions.issubset(_SUCCESSFUL_CHECKS) else "fail"
+        if any(
+            check.get("status") == "completed" and str(check.get("conclusion")) not in _SUCCESSFUL_CHECKS
+            for check in checks
+        ):
+            return "fail"
+        required = next((check for check in checks if check.get("name") == _REQUIRED_CHECK_NAME), None)
+        if required is not None and required.get("status") == "completed":
+            if str(required.get("conclusion")) not in _SUCCESSFUL_CHECKS:
+                return "fail"
+            if all(check.get("status") == "completed" for check in checks):
+                return "pass"
+        elif checks and all(check.get("status") == "completed" for check in checks):
+            return "fail"
         time.sleep(10)
     return "timeout"
 

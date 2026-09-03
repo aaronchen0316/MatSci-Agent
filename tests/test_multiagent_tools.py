@@ -87,6 +87,27 @@ def test_worktree_edit_diff_and_commit_flow(tmp_path: Path):
     committed = json.loads(tools["commit_worktree_changes"](worktree_path, "update value"))
     assert committed["status"] == "committed"
     assert len(committed["commit_sha"]) == 40
+    assert "-VALUE = 1" in tools["read_worktree_patch"](worktree_path)
+    assert "+VALUE = 2" in tools["read_worktree_patch"](worktree_path)
+
+
+def test_debugger_pytest_tool_installs_dev_extra(monkeypatch, tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    tools = _tool_map(build_tool_groups(FakeSDK(), _settings(repo, tmp_path)).debugger)
+    created = json.loads(tools["create_branch_worktree"]("fix/retrieval-dev-extra"))
+    real_run = harness_tools._run_completed
+    commands: list[list[str]] = []
+
+    def run(args, cwd):
+        if args[:2] == ["uv", "run"]:
+            commands.append(args)
+            return subprocess.CompletedProcess(args, 0, "1 passed", "")
+        return real_run(args, cwd)
+
+    monkeypatch.setattr(harness_tools, "_run_completed", run)
+
+    assert tools["run_worktree_pytest"](created["worktree_path"], ["tests/sample.py"]) == "1 passed"
+    assert commands == [["uv", "run", "--extra", "dev", "pytest", "-q", "--", "tests/sample.py"]]
 
 
 def test_worktree_creation_allocates_safe_suffix_for_retained_branch_and_path(tmp_path: Path):

@@ -9,6 +9,7 @@ from multiagent.model_preflight import prepare_live_models
 from multiagent.settings import MultiAgentSettings
 from multiagent.validation_repair import (
     blocked_validation_repair,
+    prepare_control_baseline,
     run_live_validation,
     run_validation_repair,
     validation_repair_prerequisite_error,
@@ -23,6 +24,10 @@ def validate() -> None:
     """Run the fixed eight-scenario live Materials Project validation."""
 
     settings = MultiAgentSettings.from_env()
+    error = prepare_control_baseline(settings)
+    if error:
+        console.print_json(json.dumps({"status": "blocked", "summary": error}))
+        raise typer.Exit(code=1)
     live_settings, preflight = prepare_live_models(settings)
     console.print_json(preflight.model_dump_json())
     if live_settings is None:

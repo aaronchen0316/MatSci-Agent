@@ -42,9 +42,10 @@ Implementation shape:
 15. Run tooling from `multi-agent`, but create product-only `fix/<issue>` worktrees from current `origin/main`; tooling files and prompts are never mutable repair paths.
 16. Retained historical branches have no migration or publication path. Every new repair starts from current `origin/main` and must independently satisfy namespace, product-diff, test, verifier, and fresh-live gates.
 17. Preflight `gpt-5.4-mini` through the configured proxy before live work. Retry both harness and product model settings with `gpt-5.5` only when the primary error explicitly says the model is unavailable.
-18. `validate-repair` runs the live eight-case baseline, gives every current failure one fresh 30-turn repair attempt, refreshes `origin/main` and re-evaluates all eight after each merge, then always records one final eight-case validation.
-19. After stored passing evidence, push the product branch via SSH, create a ready PR to `main`, wait for GitHub Actions on the exact validated PR head SHA, and request an exact-SHA squash merge with `GITHUB_TOKEN`. Failed gates retain branch and artifacts without merge.
-20. `validate-repair --adopt fix/<issue>` may review only an explicitly named retained branch with matching stored Debugger evidence. It derives the scenario from that evidence, deletes no-op branches, rebases later adopted branches after earlier merges, and allows one same-branch Debugger retry before applying the normal publication gates.
+18. `validate-repair` requires a clean `multi-agent` checkout containing current `origin/main` with no unforwarded product-path changes. After each successful product merge, directly merge `origin/main` into `multi-agent`, resolve conflicts, test, and push before another repair run.
+19. A committed repair worktree must be registered, clean, on the reported branch, and at the reported commit SHA. Verifier patch evidence includes committed branch diff plus any pending diff.
+20. After stored passing evidence, push the product branch via SSH, create a ready PR to `main`, wait for the exact `Product CI / test` check on the validated PR head SHA, and request an exact-SHA squash merge with `GITHUB_TOKEN`. Failed gates retain branch and artifacts without merge.
+21. `validate-repair --adopt fix/<issue>` may review only an explicitly named retained branch with matching stored Debugger evidence. It derives the scenario from that evidence, deletes no-op branches, rebases later adopted branches after earlier merges, and allows one same-branch Debugger retry before applying the normal publication gates.
 
 ## Consequences
 ### Positive

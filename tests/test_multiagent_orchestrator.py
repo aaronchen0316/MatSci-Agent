@@ -487,8 +487,7 @@ def test_live_scenario_repair_blocks_after_failed_deterministic_test_evidence(tm
     report = asyncio.run(harness.repair_scenario(scenario))
 
     assert report.stop_reason == "repair_test_evidence_failed"
-    assert verifier_calls[0].repair_test_evidence is not None
-    assert verifier_calls[0].repair_test_evidence.status == "fail"
+    assert not verifier_calls
 
 
 def test_live_scenario_uses_scoped_pass_when_tester_reports_blocked(tmp_path: Path):
@@ -604,6 +603,27 @@ def test_orchestrator_stops_when_debugger_or_verifier_cannot_continue(tmp_path: 
     assert blocked_report.stop_reason == "debugger_blocked"
     assert failed_report.stop_reason == "verifier_fail"
     assert verifier_blocked_report.stop_reason == "verifier_blocked"
+
+
+def test_orchestrator_blocks_invalid_repair_evidence_before_verifier(tmp_path: Path):
+    verifier_calls: list[FinalVerifierInput] = []
+    harness = _make_harness(
+        tmp_path,
+        tester_results=[_tester_report("fail", "fail", "mp_zero_results")],
+        critic_results=[_critic_report("agree")],
+        debugger_results=[_debugger_report()],
+        verifier_calls=verifier_calls,
+    )
+    harness.repair_test_validator = lambda *_args: RepairTestEvidence(
+        status="blocked",
+        issues=["worktree HEAD does not match debugger report"],
+    )
+
+    report = asyncio.run(harness.repair_scenario(_scenario()))
+
+    assert report.status == "blocked"
+    assert report.stop_reason == "repair_test_evidence_failed"
+    assert not verifier_calls
 
 
 def test_orchestrator_contains_agent_execution_exception(tmp_path: Path):

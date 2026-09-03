@@ -15,7 +15,7 @@ from multiagent.schemas import (
     PullRequestPublication,
 )
 from multiagent.settings import MultiAgentSettings
-from multiagent.validation_repair import run_validation_repair
+from multiagent.validation_repair import prepare_control_baseline, run_validation_repair
 
 
 def _settings(tmp_path: Path) -> MultiAgentSettings:
@@ -99,7 +99,7 @@ def test_validation_repair_attempts_each_failure_once_and_retests_after_merge(tm
     assert (artifact / "final_validation.json").is_file()
 
 
-def test_validation_repair_fails_when_merged_base_cannot_refresh(tmp_path: Path):
+def test_validation_repair_blocks_when_merged_control_baseline_cannot_prepare(tmp_path: Path):
     settings = _settings(tmp_path)
     evaluations = [_suite("volume"), _suite("volume")]
 
@@ -114,8 +114,36 @@ def test_validation_repair_fails_when_merged_base_cannot_refresh(tmp_path: Path)
         base_refresher=lambda _settings: "unable to refresh origin/main after merge",
     )
 
-    assert report.status == "fail"
+    assert report.status == "blocked"
     assert report.summary == "unable to refresh origin/main after merge"
+
+
+def test_control_baseline_requires_synced_product_paths(monkeypatch, tmp_path: Path):
+    settings = _settings(tmp_path)
+
+    def run(args, _cwd):
+        if args[:2] == ["git", "diff"]:
+            return __import__("subprocess").CompletedProcess(args, 1, "", "")
+        if args[:3] == ["git", "branch", "--show-current"]:
+            return __import__("subprocess").CompletedProcess(args, 0, "multi-agent\n", "")
+        return __import__("subprocess").CompletedProcess(args, 0, "main-sha\n" if "rev-parse" in args else "", "")
+
+    monkeypatch.setattr(validation_repair, "_run", run)
+
+    assert prepare_control_baseline(settings) == "forward-port product changes from multi-agent to origin/main before validation"
+
+
+def test_control_baseline_accepts_harness_only_divergence(monkeypatch, tmp_path: Path):
+    settings = _settings(tmp_path)
+
+    def run(args, _cwd):
+        if args[:3] == ["git", "branch", "--show-current"]:
+            return __import__("subprocess").CompletedProcess(args, 0, "multi-agent\n", "")
+        return __import__("subprocess").CompletedProcess(args, 0, "main-sha\n" if "rev-parse" in args else "", "")
+
+    monkeypatch.setattr(validation_repair, "_run", run)
+
+    assert prepare_control_baseline(settings) is None
 
 
 def test_validation_repair_processes_explicit_adoptions_before_fresh_repairs(tmp_path: Path):

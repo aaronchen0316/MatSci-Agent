@@ -93,7 +93,8 @@ Expected behavior:
 - exposes fixed eight-scenario `validate` and `validate-repair` commands; repair binds each failed scenario internally and enforces deterministic test and per-file coverage gates before publication
 - may adopt an explicitly named retained `fix/<issue>` branch only with matching stored evidence, then requires fresh verifier and live proof before publication
 - runs from tooling branch `multi-agent` against detached product `main` worktrees; debugger may create only product-only `fix/<issue>` branches
-- after every repair gate passes, pushes via SSH, opens a ready PR to `main`, waits for CI on exact PR SHA, then requests squash merge through GitHub API; failures retain branch/artifacts without merge
+- requires `multi-agent` to contain current `origin/main` and no unforwarded product-path changes before validation; after every successful repair merge, directly merge `origin/main` into `multi-agent`, resolve conflicts, test, and push
+- after every repair gate passes, pushes via SSH, opens a ready PR to `main`, waits for `Product CI / test` on exact PR SHA, then requests squash merge through GitHub API; failures retain branch/artifacts without merge
 - should preserve the existing deterministic shortlist pipeline as source of truth
 
 ### Task Registry

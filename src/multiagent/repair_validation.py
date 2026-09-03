@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from multiagent.schemas import RepairTestEvidence
 from multiagent.settings import MultiAgentSettings
+from multiagent.tools import _worktree_dir
 
 
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -137,12 +138,23 @@ def validate_repair_test_evidence(
     settings: MultiAgentSettings,
     worktree_path: Path,
     *,
+    branch_name: str,
+    commit_sha: str,
     declared_test_files: list[str],
     declared_test_targets: list[str],
 ) -> RepairTestEvidence:
     """Run deterministic test and coverage gates for a committed repair worktree."""
 
-    repo_root = worktree_path.resolve()
+    try:
+        repo_root = _worktree_dir(
+            settings,
+            str(worktree_path),
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            require_clean=True,
+        )
+    except ValueError as exc:
+        return RepairTestEvidence(status="blocked", issues=[str(exc)])
     issues: list[str] = []
     try:
         changed_sources, changed_tests, removed_tests = _changed_paths(repo_root, settings.target_base_ref)

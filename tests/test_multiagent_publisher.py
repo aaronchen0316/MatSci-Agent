@@ -47,6 +47,41 @@ def test_publisher_requires_remote_tracking_base(monkeypatch, tmp_path: Path):
     assert publisher._ensure_clean_tooling(settings) == "target base ref does not exist: origin/main"
 
 
+def test_wait_for_checks_requires_named_product_ci_and_no_failed_checks(monkeypatch):
+    monkeypatch.setattr(
+        publisher,
+        "_github_json",
+        lambda **_kwargs: {
+            "check_runs": [
+                {"name": "Product CI / test", "status": "completed", "conclusion": "success"},
+                {"name": "lint", "status": "completed", "conclusion": "success"},
+            ]
+        },
+    )
+
+    assert publisher._wait_for_checks(repository="example/repo", token="token", sha="head", timeout_seconds=1) == "pass"
+
+
+def test_wait_for_checks_rejects_missing_required_or_failed_extra_check(monkeypatch):
+    monkeypatch.setattr(
+        publisher,
+        "_github_json",
+        lambda **_kwargs: {"check_runs": [{"name": "lint", "status": "completed", "conclusion": "success"}]},
+    )
+    assert publisher._wait_for_checks(repository="example/repo", token="token", sha="head", timeout_seconds=1) == "fail"
+    monkeypatch.setattr(
+        publisher,
+        "_github_json",
+        lambda **_kwargs: {
+            "check_runs": [
+                {"name": "Product CI / test", "status": "completed", "conclusion": "success"},
+                {"name": "lint", "status": "completed", "conclusion": "failure"},
+            ]
+        },
+    )
+    assert publisher._wait_for_checks(repository="example/repo", token="token", sha="head", timeout_seconds=1) == "fail"
+
+
 def test_publisher_rejects_non_product_diff_before_push(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setattr(publisher, "_ensure_clean_tooling", lambda *_args: None)

@@ -108,10 +108,12 @@ class MultiAgentHarness:
     final_verifier_runner: Callable[[FinalVerifierInput], Awaitable[FinalVerifierReport]]
     runtime_rebinder: Callable[[Path], None] | None = None
     scenario_evaluator: Callable[[MultiAgentSettings, LiveEvalInput], LiveEvalEvidence] = run_scoped_live_evaluation
-    repair_test_validator: Callable[[MultiAgentSettings, Path, list[str], list[str]], RepairTestEvidence] = (
-        lambda settings, worktree_path, test_files, test_targets: validate_repair_test_evidence(
+    repair_test_validator: Callable[[MultiAgentSettings, Path, str, str, list[str], list[str]], RepairTestEvidence] = (
+        lambda settings, worktree_path, branch_name, commit_sha, test_files, test_targets: validate_repair_test_evidence(
             settings,
             worktree_path,
+            branch_name=branch_name,
+            commit_sha=commit_sha,
             declared_test_files=test_files,
             declared_test_targets=test_targets,
         )
@@ -422,18 +424,42 @@ class MultiAgentHarness:
                     next_step="Enable mutation prerequisites or resolve debugger blocker, then rerun harness.",
                 )
 
-            if not worktree_path:
-                repair_test_evidence = RepairTestEvidence(status="blocked", issues=["debugger did not report a worktree path"])
+            if (
+                debugger_report.status != "patched"
+                or not worktree_path
+                or not debugger_report.branch_name
+                or not debugger_report.commit_sha
+            ):
+                repair_test_evidence = RepairTestEvidence(
+                    status="blocked",
+                    issues=["debugger did not report a committed repair worktree"],
+                )
             else:
                 repair_test_evidence = self.repair_test_validator(
                     self.settings,
                     Path(worktree_path),
+                    debugger_report.branch_name,
+                    debugger_report.commit_sha,
                     debugger_report.test_files,
                     debugger_report.test_targets,
                 )
             latest_repair_test_evidence = repair_test_evidence
             attempt.repair_test_evidence = repair_test_evidence
             store.write_model(f"attempts/{attempt_number}/repair_test_evidence.json", repair_test_evidence)
+
+            if repair_test_evidence.status != "pass":
+                attempt.stop_reason_fragment = "repair_test_evidence_failed"
+                attempts.append(attempt)
+                return finish(
+                    status="blocked" if repair_test_evidence.status == "blocked" else "fail",
+                    stop_reason="repair_test_evidence_failed",
+                    summary=(
+                        "Repair worktree identity could not be verified."
+                        if repair_test_evidence.status == "blocked"
+                        else "Deterministic repair-test validation rejected the patch."
+                    ),
+                    next_step="Inspect retained branch and repair_test_evidence artifact.",
+                )
 
             verifier_input = FinalVerifierInput(
                 objective=objective,
@@ -454,16 +480,6 @@ class MultiAgentHarness:
             store.write_model(f"attempts/{attempt_number}/final_verifier_report.json", verifier_report)
             latest_verifier = verifier_report
             attempt.verifier_report = verifier_report
-
-            if repair_test_evidence is not None and repair_test_evidence.status != "pass":
-                attempt.stop_reason_fragment = "repair_test_evidence_failed"
-                attempts.append(attempt)
-                return finish(
-                    status="fail",
-                    stop_reason="repair_test_evidence_failed",
-                    summary="Deterministic repair-test validation rejected the patch.",
-                    next_step="Inspect retained branch and repair_test_evidence artifact.",
-                )
 
             if verifier_report.status == "blocked":
                 attempt.stop_reason_fragment = "verifier_blocked"

@@ -91,7 +91,14 @@ def _registered_worktree_paths(settings: MultiAgentSettings) -> set[Path]:
     }
 
 
-def _worktree_dir(settings: MultiAgentSettings, worktree_path: str) -> Path:
+def _worktree_dir(
+    settings: MultiAgentSettings,
+    worktree_path: str,
+    *,
+    branch_name: str | None = None,
+    commit_sha: str | None = None,
+    require_clean: bool = False,
+) -> Path:
     root = settings.worktree_root.resolve()
     path = Path(worktree_path).resolve()
     if not _is_under(root, path) or root == path:
@@ -100,6 +107,12 @@ def _worktree_dir(settings: MultiAgentSettings, worktree_path: str) -> Path:
         raise ValueError(f"worktree path does not exist: {worktree_path}")
     if path not in _registered_worktree_paths(settings):
         raise ValueError(f"worktree path is not a registered git worktree: {worktree_path}")
+    if branch_name and _output(_run_completed(["git", "branch", "--show-current"], path)) != branch_name:
+        raise ValueError("worktree branch does not match debugger report")
+    if commit_sha and _output(_run_completed(["git", "rev-parse", "HEAD"], path)) != commit_sha:
+        raise ValueError("worktree HEAD does not match debugger report")
+    if require_clean and _output(_run_completed(["git", "status", "--porcelain"], path)):
+        raise ValueError("worktree has uncommitted changes")
     return path
 
 
@@ -156,12 +169,19 @@ def _numbered_slice(path: Path, start_line: int = 1, end_line: int = 240) -> str
     return "\n".join(f"{index}: {line}" for index, line in enumerate(lines[start - 1 : end], start=start))
 
 
+def _repair_diff(settings: MultiAgentSettings, cwd: Path, *, stat: bool = False) -> str:
+    option = ["--stat"] if stat else []
+    committed = _output(_run_completed(["git", "diff", *option, f"{settings.target_base_ref}...HEAD", "--"], cwd))
+    pending = _output(_run_completed(["git", "diff", *option, "HEAD", "--"], cwd))
+    return "\n".join(part for part in [committed, pending] if part)
+
+
 def worktree_evidence(settings: MultiAgentSettings, worktree_path: str) -> dict[str, str]:
     cwd = _worktree_dir(settings, worktree_path)
     return {
         "status": _output(_run_completed(["git", "status", "--short"], cwd)),
-        "diff_stat": _output(_run_completed(["git", "diff", "--stat"], cwd)),
-        "patch": _output(_run_completed(["git", "diff", "--"], cwd)),
+        "diff_stat": _repair_diff(settings, cwd, stat=True),
+        "patch": _repair_diff(settings, cwd),
         "head": _output(_run_completed(["git", "rev-parse", "HEAD"], cwd)),
     }
 
@@ -325,19 +345,19 @@ def build_tool_groups(sdk, settings: MultiAgentSettings) -> ToolGroups:
     def read_worktree_diff(worktree_path: str) -> str:
         """Read isolated-worktree diff stat."""
 
-        return _output(_run_completed(["git", "diff", "--stat"], _worktree_dir(settings, worktree_path)))
+        return _repair_diff(settings, _worktree_dir(settings, worktree_path), stat=True)
 
     def read_worktree_patch(worktree_path: str) -> str:
         """Read isolated-worktree full patch."""
 
-        return _output(_run_completed(["git", "diff", "--"], _worktree_dir(settings, worktree_path)))
+        return _repair_diff(settings, _worktree_dir(settings, worktree_path))
 
     def run_worktree_pytest(worktree_path: str, targets: list[str]) -> str:
         """Run bounded changed-test file targets from a managed repair worktree."""
 
         worktree = _worktree_dir(settings, worktree_path)
         normalized = _test_targets(worktree, targets)
-        return _output(_run_completed(["uv", "run", "pytest", "-q", "--", *normalized], worktree))
+        return _output(_run_completed(["uv", "run", "--extra", "dev", "pytest", "-q", "--", *normalized], worktree))
 
     def apply_worktree_text_edit(
         worktree_path: str,

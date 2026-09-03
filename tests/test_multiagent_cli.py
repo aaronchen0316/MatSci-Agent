@@ -34,6 +34,7 @@ def _preflight(settings: MultiAgentSettings) -> tuple[MultiAgentSettings, ModelP
 def test_validate_preflights_then_prints_live_suite(monkeypatch, tmp_path: Path):
     settings = _settings(tmp_path)
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(multiagent_cli, "prepare_control_baseline", lambda _settings: None)
     monkeypatch.setattr(multiagent_cli, "prepare_live_models", lambda value: _preflight(value))
     monkeypatch.setattr(
         multiagent_cli,
@@ -56,12 +57,28 @@ def test_validate_stops_after_blocked_model_preflight(monkeypatch, tmp_path: Pat
         summary="proxy unavailable",
     )
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(multiagent_cli, "prepare_control_baseline", lambda _settings: None)
     monkeypatch.setattr(multiagent_cli, "prepare_live_models", lambda _value: (None, blocked))
 
     result = runner.invoke(multiagent_cli.app, ["validate"])
 
     assert result.exit_code == 1
     assert "proxy unavailable" in result.stdout
+
+
+def test_validate_blocks_before_model_preflight_when_control_baseline_is_stale(monkeypatch, tmp_path: Path):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(
+        multiagent_cli,
+        "prepare_control_baseline",
+        lambda _settings: "multi-agent must merge origin/main before validation",
+    )
+
+    result = runner.invoke(multiagent_cli.app, ["validate"])
+
+    assert result.exit_code == 1
+    assert "must merge" in result.stdout
 
 
 def test_validate_repair_blocks_before_model_call_when_prerequisites_fail(monkeypatch, tmp_path: Path):
