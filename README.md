@@ -77,7 +77,7 @@ The search-space expander:
 - runs before retrieval for supported screening requests
 - returns bounded formula targets with normalized formula, `chemsys`, confidence, and rationale
 - defaults to `min(max(top_k * 3, top_k), 30)` targets
-- uses the shared OpenAI-compatible product client with `gpt-5.4-mini`; an explicit unavailable-model error alone falls back to `gpt-5.5`
+- uses the shared OpenAI-compatible product client with `gpt-5.5`
 - retries transient remote failures up to three total attempts, then fails closed if no valid MP-compatible formula targets remain
 - appears in `/discover/full` as `search_space_targets` plus provenance
 
