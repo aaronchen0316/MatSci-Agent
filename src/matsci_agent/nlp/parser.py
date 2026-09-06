@@ -11,8 +11,7 @@ from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPF
 
 logger = logging.getLogger(__name__)
 _DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-PRIMARY_LLM_MODEL = "gpt-5.4-mini"
-FALLBACK_LLM_MODEL = "gpt-5.5"
+PRIMARY_LLM_MODEL = "gpt-5.5"
 _ELEMENT_NAME_TO_SYMBOL = {
     "hydrogen": "H", "helium": "He", "lithium": "Li", "beryllium": "Be", "boron": "B", "carbon": "C",
     "nitrogen": "N", "oxygen": "O", "fluorine": "F", "neon": "Ne", "sodium": "Na", "magnesium": "Mg",
