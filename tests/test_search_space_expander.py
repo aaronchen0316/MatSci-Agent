@@ -4,7 +4,7 @@ import pytest
 
 import matsci_agent.agents.search_space_expander as search_space_expander
 from matsci_agent.agents.search_space_expander import SearchSpaceExpansionAgent, SearchSpaceExpansionError
-from matsci_agent.nlp.parser import FALLBACK_LLM_MODEL, PRIMARY_LLM_MODEL
+from matsci_agent.nlp.parser import PRIMARY_LLM_MODEL
 from matsci_agent.schemas import DiscoveryConstraints, DiscoveryPlan, SearchSpaceExpansionInput
 
 
@@ -112,7 +112,7 @@ def test_expander_fails_closed_when_no_valid_targets():
         raise AssertionError("expected SearchSpaceExpansionError")
 
 
-def test_expander_uses_shared_primary_model_and_falls_back_when_unavailable(monkeypatch):
+def test_expander_uses_shared_primary_model_and_blocks_when_unavailable(monkeypatch):
     import openai
 
     requests: list[dict] = []
@@ -124,9 +124,7 @@ def test_expander_uses_shared_primary_model_and_falls_back_when_unavailable(monk
 
         def create(self, **kwargs):
             requests.append(kwargs)
-            if kwargs["model"] == PRIMARY_LLM_MODEL:
-                raise RuntimeError("model not found")
-            return _response('{"formula_targets":[{"formula":"CsSnI3"}]}')
+            raise RuntimeError("model not found")
 
         def close(self) -> None:
             pass
@@ -137,11 +135,14 @@ def test_expander_uses_shared_primary_model_and_falls_back_when_unavailable(monk
     monkeypatch.setattr(openai, "OpenAI", FakeClient)
 
     agent = SearchSpaceExpansionAgent()
-    out = agent.expand(SearchSpaceExpansionInput(research_goal=_plan().research_goal_raw, discovery_plan=_plan()))
+    try:
+        agent.expand(SearchSpaceExpansionInput(research_goal=_plan().research_goal_raw, discovery_plan=_plan()))
+    except SearchSpaceExpansionError as exc:
+        assert exc.code == "search_space_expansion_request_failed"
+    else:
+        raise AssertionError("expected SearchSpaceExpansionError")
 
-    assert [request["model"] for request in requests] == [PRIMARY_LLM_MODEL, FALLBACK_LLM_MODEL]
-    assert out.provenance.output_summary["model"] == FALLBACK_LLM_MODEL
-    assert out.provenance.output_summary["request_attempt_count"] == 2
+    assert [request["model"] for request in requests] == [PRIMARY_LLM_MODEL]
 
 
 def test_expander_retries_transient_timeout_with_backoff(monkeypatch):

@@ -7,10 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 from matsci_agent.nlp.parser import (
-    FALLBACK_LLM_MODEL,
     PRIMARY_LLM_MODEL,
     _ELEMENT_NAME_TO_SYMBOL,
-    is_unavailable_model_error,
     normalize_llm_provider,
     resolve_llm_api_key,
     resolve_llm_base_url,
@@ -138,10 +136,6 @@ class SearchSpaceExpansionAgent:
         client = OpenAI(api_key=api_key, base_url=resolve_llm_base_url(), timeout=_TIMEOUT_SECS)
         try:
             return self._request_model(client, prompt_payload, self.model)
-        except SearchSpaceExpansionError as exc:
-            if self.model != PRIMARY_LLM_MODEL or not is_unavailable_model_error(exc):
-                raise
-            return self._request_model(client, prompt_payload, FALLBACK_LLM_MODEL)
         finally:
             client.close()
 
