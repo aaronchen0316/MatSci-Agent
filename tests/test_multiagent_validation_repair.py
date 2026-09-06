@@ -25,10 +25,10 @@ def _settings(tmp_path: Path) -> MultiAgentSettings:
 def _preflight() -> ModelPreflightReport:
     return ModelPreflightReport(
         status="pass",
-        primary_model="gpt-5.4-mini",
-        selected_model="gpt-5.4-mini",
-        selected_product_model="gpt-5.4-mini",
-        attempts=["gpt-5.4-mini"],
+        primary_model="gpt-5.5",
+        selected_model="gpt-5.5",
+        selected_product_model="gpt-5.5",
+        attempts=["gpt-5.5"],
         summary="ok",
     )
 

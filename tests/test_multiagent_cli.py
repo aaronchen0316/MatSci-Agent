@@ -23,10 +23,10 @@ def _settings(tmp_path: Path) -> MultiAgentSettings:
 def _preflight(settings: MultiAgentSettings) -> tuple[MultiAgentSettings, ModelPreflightReport]:
     return settings, ModelPreflightReport(
         status="pass",
-        primary_model="gpt-5.4-mini",
-        selected_model="gpt-5.4-mini",
-        selected_product_model="gpt-5.4-mini",
-        attempts=["gpt-5.4-mini"],
+        primary_model="gpt-5.5",
+        selected_model="gpt-5.5",
+        selected_product_model="gpt-5.5",
+        attempts=["gpt-5.5"],
         summary="ok",
     )
 
@@ -52,8 +52,8 @@ def test_validate_stops_after_blocked_model_preflight(monkeypatch, tmp_path: Pat
     settings = _settings(tmp_path)
     blocked = ModelPreflightReport(
         status="blocked",
-        primary_model="gpt-5.4-mini",
-        attempts=["gpt-5.4-mini"],
+        primary_model="gpt-5.5",
+        attempts=["gpt-5.5"],
         summary="proxy unavailable",
     )
     monkeypatch.setattr(multiagent_cli.MultiAgentSettings, "from_env", classmethod(lambda cls: settings))
@@ -96,8 +96,8 @@ def test_validate_repair_persists_blocked_preflight_report(monkeypatch, tmp_path
     settings = _settings(tmp_path)
     blocked = ModelPreflightReport(
         status="blocked",
-        primary_model="gpt-5.4-mini",
-        attempts=["gpt-5.4-mini"],
+        primary_model="gpt-5.5",
+        attempts=["gpt-5.5"],
         summary="model endpoint rejected request",
     )
     report = ValidationRepairReport(status="blocked", summary=blocked.summary, model_preflight=blocked)

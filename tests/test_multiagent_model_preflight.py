@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from multiagent.model_preflight import FALLBACK_MODEL, PRIMARY_MODEL, prepare_live_models
+from multiagent.model_preflight import PRIMARY_MODEL, prepare_live_models
 from multiagent.settings import MultiAgentSettings
 
 
@@ -20,7 +20,7 @@ def test_model_preflight_uses_primary_for_harness_and_product(tmp_path):
     assert report.status == "pass"
 
 
-def test_model_preflight_falls_back_only_for_explicit_unavailable_model(tmp_path):
+def test_model_preflight_blocks_unavailable_model_without_an_alternate(tmp_path):
     seen: list[str] = []
 
     def probe(settings):
@@ -30,11 +30,9 @@ def test_model_preflight_falls_back_only_for_explicit_unavailable_model(tmp_path
 
     settings, report = prepare_live_models(_settings(tmp_path), probe=probe)
 
-    assert seen == [PRIMARY_MODEL, FALLBACK_MODEL]
-    assert settings is not None
-    assert settings.model == FALLBACK_MODEL
-    assert settings.product_model == FALLBACK_MODEL
-    assert report.status == "fallback"
+    assert seen == [PRIMARY_MODEL]
+    assert settings is None
+    assert report.status == "blocked"
 
 
 def test_model_preflight_blocks_other_proxy_failures_without_fallback(tmp_path):
