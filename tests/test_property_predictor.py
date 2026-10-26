@@ -1,260 +1,102 @@
-import builtins
+import pytest
 import sys
-import types
-import warnings
+from types import ModuleType
 
 from matsci_agent.schemas import Candidate, PropertyPredictorInput
-from matsci_agent.tools import property_predictor as predictor_module
-from matsci_agent.tools.property_predictor import PropertyPredictor
+from matsci_agent.tools import property_predictor as module
+from matsci_agent.tools.property_predictor import MatGLCalculationError, PropertyPredictor
 
 
-def test_predictor_prefers_mp_band_gap_when_available_and_not_forced():
-    predictor = PropertyPredictor()
-    payload = PropertyPredictorInput(
-        candidates=[
-            Candidate(
-                material_id="c1",
-                formula="AlN",
-                features={"mp_band_gap_ev": 5.7, "nsites": 8},
-            )
-        ],
+def _candidate(material_id: str, gap: float | None) -> Candidate:
+    return Candidate(
+        material_id=material_id,
+        formula="AlN",
+        source="materials_project",
+        features={"mp_band_gap_ev": gap, "nsites": 8, "structure": {"test": True}},
+    )
+
+
+def test_without_explicit_matgl_uses_mp_or_unknown(monkeypatch):
+    monkeypatch.setattr(module, "_calculate_matgl", lambda *_args, **_kwargs: pytest.fail("MatGL ran implicitly"))
+    result = PropertyPredictor().run(PropertyPredictorInput(
+        candidates=[_candidate("mp-1", 5.7), _candidate("mp-2", None)],
         goal="find semiconductors",
-        calculate_matgl=False,
-    )
-
-    out = predictor.run(payload)
-
-    assert out.predictions[0].predicted.backend == "materials_project_band_gap"
-    assert out.predictions[0].predicted.band_gap_ev == 5.7
-    assert out.provenance.output_summary["used_mp_count"] == 1
-    assert out.predictions[0].candidate.features["band_gap_source"] == "materials_project"
-    assert out.predictions[0].candidate.features["matgl_forced"] is False
+    ))
+    assert [item.predicted.band_gap_ev for item in result.predictions] == [5.7, None]
+    assert [item.predicted.backend for item in result.predictions] == ["materials_project", "unknown"]
 
 
-def test_predictor_forced_matgl_applies_deterministic_limits_and_provenance_tags():
-    predictor = PropertyPredictor()
-    payload = PropertyPredictorInput(
-        candidates=[
-            Candidate(
-                material_id="mp-20",
-                formula="AlN",
-                features={"mp_band_gap_ev": 5.7, "nsites": 8},
-            ),
-            Candidate(
-                material_id="mp-3",
-                formula="Fe2VAl",
-                features={"mp_band_gap_ev": None, "nsites": 12},
-            ),
-            Candidate(
-                material_id="mp-1",
-                formula="Ni3Al",
-                features={"mp_band_gap_ev": None, "nsites": 55},
-            ),
-        ],
-        goal="force recalculate with matgl",
-        calculate_matgl=True,
-        matgl_max_recalc_entries=1,
-        matgl_max_atoms=50,
-    )
-
-    out = predictor.run(payload)
-
-    assert out.provenance.output_summary["forced_matgl_count"] == 1
-    assert out.provenance.output_summary["matgl_skipped_count"] == 2
-    assert out.provenance.output_summary["matgl_selected_material_ids"] == ["mp-3"]
-
-    by_id = {p.candidate.material_id: p for p in out.predictions}
-    assert all(p.candidate.features["matgl_forced"] is True for p in out.predictions)
-    assert by_id["mp-20"].candidate.features["matgl_skipped_reason"] == "recalc_limit_reached"
-    assert by_id["mp-20"].candidate.features["band_gap_source"] == "materials_project"
-    assert by_id["mp-1"].candidate.features["matgl_skipped_reason"] == "atoms_too_high_or_missing_nsites"
-    assert by_id["mp-1"].candidate.features["band_gap_source"] == "fallback"
+def test_explicit_matgl_reports_value_and_difference(monkeypatch):
+    monkeypatch.setattr(module, "_calculate_matgl", lambda *_args, **_kwargs: (1.5, None))
+    result = PropertyPredictor().run(PropertyPredictorInput(
+        candidates=[_candidate("mp-1", 2.5)], goal="calculate MatGL", calculate_matgl=True,
+    ))
+    item = result.predictions[0]
+    assert item.predicted.band_gap_ev == 1.5
+    assert item.candidate.features["mp_band_gap_ev"] == 2.5
+    assert item.candidate.features["gap_difference_ev"] == -1.0
 
 
-def test_predictor_selective_recalc_limits_forced_matgl_to_top_n():
-    predictor = PropertyPredictor()
-    payload = PropertyPredictorInput(
-        candidates=[
-            Candidate(material_id="mp-1", formula="AlN", features={"mp_band_gap_ev": 5.7, "nsites": 8}),
-            Candidate(material_id="mp-2", formula="GaN", features={"mp_band_gap_ev": 3.2, "nsites": 8}),
-            Candidate(material_id="mp-3", formula="ZnO", features={"mp_band_gap_ev": 2.1, "nsites": 8}),
-        ],
-        goal="recalculate top 1 candidate",
-        calculate_matgl=True,
-        recalculate_top_n=1,
-        matgl_max_recalc_entries=3,
-        matgl_max_atoms=50,
-    )
-
-    out = predictor.run(payload)
-
-    assert out.provenance.output_summary["forced_matgl_count"] == 1
-    assert out.provenance.output_summary["matgl_selected_material_ids"] == ["mp-1"]
+def test_matgl_failure_does_not_substitute_mp_gap(monkeypatch):
+    monkeypatch.setattr(module, "_calculate_matgl", lambda *_args, **_kwargs: (None, "model failed"))
+    result = PropertyPredictor().run(PropertyPredictorInput(
+        candidates=[_candidate("mp-1", 5.7)], goal="calculate MatGL", calculate_matgl=True,
+    ))
+    item = result.predictions[0]
+    assert item.predicted.band_gap_ev is None
+    assert item.predicted.error == "model failed"
+    assert item.candidate.features["mp_band_gap_ev"] == 5.7
+    assert item.candidate.features["matgl_error"] == "model failed"
+    assert "matgl_band_gap_ev" not in item.candidate.features
 
 
-def test_predictor_selective_recalc_falls_back_for_unselected_missing_mp_gap():
-    predictor = PropertyPredictor()
-    payload = PropertyPredictorInput(
-        candidates=[
-            Candidate(material_id="mp-1", formula="AlN", features={"mp_band_gap_ev": 5.7, "nsites": 8}),
-            Candidate(material_id="mp-2", formula="GaN", features={"mp_band_gap_ev": 3.2, "nsites": 8}),
-            Candidate(material_id="mp-3", formula="Fe2VAl", features={"mp_band_gap_ev": None, "nsites": 12}),
-        ],
-        goal="recalculate the top 2 candidates with MatGL",
-        calculate_matgl=True,
-        recalculate_top_n=2,
-        matgl_max_recalc_entries=2,
-        matgl_max_atoms=50,
-    )
-
-    out = predictor.run(payload)
-
-    assert out.provenance.output_summary["forced_matgl_count"] == 2
-    assert out.provenance.output_summary["fallback_count"] >= 1
-    by_id = {prediction.candidate.material_id: prediction for prediction in out.predictions}
-    assert by_id["mp-3"].candidate.features["band_gap_source"] == "fallback"
-    assert by_id["mp-3"].predicted.backend.startswith("m3gnet_structure_fallback:")
+def test_matgl_limit_stops_before_any_calculation(monkeypatch):
+    monkeypatch.setattr(module, "_calculate_matgl", lambda *_args, **_kwargs: pytest.fail("Calculation started"))
+    with pytest.raises(MatGLCalculationError) as error:
+        PropertyPredictor().run(PropertyPredictorInput(
+            candidates=[_candidate("mp-1", 2.0), _candidate("mp-2", 3.0)],
+            goal="calculate MatGL", calculate_matgl=True, matgl_max_recalc_entries=1,
+        ))
+    assert error.value.code == "matgl_limit_exceeded"
 
 
-def test_predictor_preserves_mp_gap_when_matgl_fails_on_finalized_shortlist(monkeypatch):
-    monkeypatch.setattr(
-        predictor_module,
-        "structure_predict_m3gnet",
-        lambda **_kwargs: predictor_module.PredictedProperties(
-            band_gap_ev=0.8,
-            uncertainty=6.0,
-            backend="m3gnet_structure_fallback:missing_structure",
-        ),
-    )
-    predictor = PropertyPredictor()
-    payload = PropertyPredictorInput(
-        candidates=[
-            Candidate(material_id="mp-1", formula="AlN", features={"mp_band_gap_ev": 5.7, "nsites": 8}),
-        ],
-        goal="recalculate shortlisted candidate",
-        calculate_matgl=True,
-        preserve_mp_gap_on_matgl_failure=True,
-    )
-
-    out = predictor.run(payload)
-
-    prediction = out.predictions[0]
-    assert prediction.predicted.band_gap_ev == 5.7
-    assert prediction.predicted.backend == "materials_project_band_gap"
-    assert prediction.candidate.features["band_gap_source"] == "materials_project"
-    assert prediction.candidate.features.get("matgl_band_gap_ev") is None
-
-
-def test_predict_with_matgl_model_uses_compat_when_primary_path_fails(monkeypatch):
-    class BrokenModel:
+def test_invalid_matgl_output_is_failure_not_1_2_ev(monkeypatch):
+    class Model:
         def predict_structure(self, _structure):
-            raise RuntimeError("primary path failed")
+            return {"other_property": 1.2}
 
-    monkeypatch.setattr(
-        predictor_module,
-        "_load_matgl_bandgap_model",
-        lambda: (BrokenModel(), "MEGNet-MP-2019.4.1-BandGap-mfi", None),
-    )
-    monkeypatch.setattr(
-        predictor_module,
-        "_predict_with_matgl_compat",
-        lambda _model, _structure: (2.35, None),
-    )
-
-    band_gap_ev, err = predictor_module._predict_with_matgl_model(structure={})
-    assert err is None
-    assert band_gap_ev == 2.35
+    monkeypatch.setattr(module, "_structure", lambda _features: object())
+    monkeypatch.setattr(module, "_load_model", lambda: (Model(), None))
+    gap, error = module._calculate_matgl({"structure": {}}, relax=False, max_steps=1)
+    assert gap is None
+    assert "no valid band gap" in error
 
 
-def test_load_matgl_bandgap_model_suppresses_known_model_version_warning(monkeypatch):
-    fake_matgl = types.ModuleType("matgl")
+def test_relaxation_uses_pyg_relaxer_with_pyg_potential(monkeypatch):
+    class Model:
+        def predict_structure(self, structure):
+            assert structure == "relaxed"
+            return 2.1
 
-    def fake_load_model(_name):
-        warnings.warn(
-            (
-                "Incompatible model version detected! The code will continue to load the "
-                "model but it is recommended that you provide a path to an updated model"
-            ),
-            UserWarning,
-            stacklevel=1,
-        )
-        return object()
+    class Relaxer:
+        def __init__(self, potential):
+            assert potential == "pyg potential"
 
-    fake_matgl.set_backend = lambda _backend: None
-    fake_matgl.load_model = fake_load_model
+        def relax(self, structure, steps):
+            assert structure == "original"
+            assert steps == 3
+            return {"final_structure": "relaxed"}
 
-    monkeypatch.setattr(predictor_module, "_MATGL_MODEL", None)
-    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_NAME", "")
-    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_SOURCE", "")
-    monkeypatch.setattr(predictor_module, "_MATGL_LOAD_ERROR", None)
-    monkeypatch.setattr(
-        predictor_module,
-        "_load_model_from_torch_hub",
-        lambda _candidate_name: (None, "torch_hub_skipped_for_test"),
-    )
-    monkeypatch.setattr(
-        predictor_module,
-        "_matgl_model_candidates",
-        lambda: ["models/pretrained/MEGNet-test"],
-    )
-    monkeypatch.setitem(sys.modules, "matgl", fake_matgl)
+    matgl = ModuleType("matgl")
+    matgl.load_model = lambda _name: "pyg potential"
+    matgl_ext = ModuleType("matgl.ext")
+    matgl_ext.__path__ = []
+    pyg_ase = ModuleType("matgl.ext._ase_pyg")
+    pyg_ase.Relaxer = Relaxer
+    monkeypatch.setitem(sys.modules, "matgl", matgl)
+    monkeypatch.setitem(sys.modules, "matgl.ext", matgl_ext)
+    monkeypatch.setitem(sys.modules, "matgl.ext._ase_pyg", pyg_ase)
+    monkeypatch.setattr(module, "_structure", lambda _features: "original")
+    monkeypatch.setattr(module, "_load_model", lambda: (Model(), None))
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model, name, err = predictor_module._load_matgl_bandgap_model()
-
-    assert model is not None
-    assert name == "models/pretrained/MEGNet-test"
-    assert err is None
-    assert caught == []
-
-
-def test_load_matgl_bandgap_model_suppresses_known_torchdata_warning(monkeypatch):
-    fake_matgl = types.ModuleType("matgl")
-    fake_matgl.set_backend = lambda _backend: None
-    fake_matgl.load_model = lambda _name: object()
-
-    real_import = builtins.__import__
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "matgl":
-            warnings.warn(
-                (
-                    "\n################################################################################\n"
-                    "WARNING!\n"
-                    "The 'datapipes', 'dataloader2' modules are deprecated and will be removed in a\n"
-                    "future torchdata release! Please see https://github.com/pytorch/data/issues/1196\n"
-                    "to learn more and leave feedback.\n"
-                    "################################################################################\n"
-                ),
-                UserWarning,
-                stacklevel=1,
-            )
-            return fake_matgl
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(predictor_module, "_MATGL_MODEL", None)
-    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_NAME", "")
-    monkeypatch.setattr(predictor_module, "_MATGL_MODEL_SOURCE", "")
-    monkeypatch.setattr(predictor_module, "_MATGL_LOAD_ERROR", None)
-    monkeypatch.setattr(
-        predictor_module,
-        "_load_model_from_torch_hub",
-        lambda _candidate_name: (None, "torch_hub_skipped_for_test"),
-    )
-    monkeypatch.setattr(
-        predictor_module,
-        "_matgl_model_candidates",
-        lambda: ["models/pretrained/MEGNet-test"],
-    )
-    monkeypatch.delitem(sys.modules, "matgl", raising=False)
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model, name, err = predictor_module._load_matgl_bandgap_model()
-
-    assert model is not None
-    assert name == "models/pretrained/MEGNet-test"
-    assert err is None
-    assert caught == []
+    assert module._calculate_matgl({"structure": {}}, relax=True, max_steps=3) == (2.1, None)

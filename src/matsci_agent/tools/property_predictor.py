@@ -1,9 +1,7 @@
 from __future__ import annotations
 
+import math
 import os
-import warnings
-from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 from matsci_agent.schemas import (
@@ -14,578 +12,140 @@ from matsci_agent.schemas import (
     ToolCallProvenance,
 )
 
-
-_M3GNET_MODEL: Any | None = None
-_M3GNET_LOAD_ERROR: str | None = None
-_MATGL_MODEL: Any | None = None
-_MATGL_MODEL_NAME: str = ""
-_MATGL_MODEL_SOURCE: str = ""
-_MATGL_LOAD_ERROR: str | None = None
-_MATGL_RELAXER: Any | None = None
-_MATGL_RELAXER_ERROR: str | None = None
-_DEFAULT_BANDGAP_MODEL = "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"
-
-_KNOWN_MATGL_WARNING_PATTERNS = (
-    r"(?s).*datapipes.*dataloader2.*deprecated.*",
-    r"Incompatible model version detected!.*",
-)
+_DEFAULT_MODEL = "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"
+_MODEL: Any | None = None
+_MODEL_ERROR: str | None = None
 
 
-@contextmanager
-def _suppress_known_matgl_warnings():
-    with warnings.catch_warnings():
-        for pattern in _KNOWN_MATGL_WARNING_PATTERNS:
-            warnings.filterwarnings("ignore", message=pattern, category=UserWarning)
-        yield
+class MatGLCalculationError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
-def _heuristic_fallback(formula: str, goal: str, reason: str) -> PredictedProperties:
-    base = float(sum((i + 1) * ord(ch) for i, ch in enumerate(formula)) % 300)
-    goal_boost = 1.5 if "band gap" in goal.lower() or "semiconductor" in goal.lower() else 0.5
-    band_gap_ev = 0.5 + (base / 120.0) + goal_boost
-    uncertainty = max(6.0, 16.0 - 0.2 * len(formula))
-    return PredictedProperties(
-        band_gap_ev=band_gap_ev,
-        uncertainty=uncertainty,
-        backend=f"m3gnet_structure_fallback:{reason}",
-    )
-
-
-def _coerce_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, (list, tuple)) and len(value) == 1:
-        return _coerce_float(value[0])
-    for attr in ("item",):
-        if hasattr(value, attr):
-            try:
-                return float(getattr(value, attr)())
-            except Exception:
-                pass
-    if hasattr(value, "detach") and hasattr(value, "cpu") and hasattr(value, "numpy"):
-        try:
-            arr = value.detach().cpu().numpy().reshape(-1)
-            if arr.size:
-                return float(arr[0])
-        except Exception:
-            pass
+def _load_model() -> tuple[Any | None, str | None]:
+    global _MODEL, _MODEL_ERROR
+    if _MODEL is not None or _MODEL_ERROR is not None:
+        return _MODEL, _MODEL_ERROR
     try:
-        return float(value)
-    except Exception:
-        return None
+        import matgl
+
+        model_name = os.getenv("MATSCI_MATGL_MODEL", _DEFAULT_MODEL)
+        if model_name.split("/")[-1].startswith("MEGNet-"):
+            matgl.set_backend("DGL")
+        _MODEL = matgl.load_model(model_name)
+    except Exception as exc:
+        _MODEL_ERROR = f"MatGL model unavailable: {exc}"
+    return _MODEL, _MODEL_ERROR
 
 
-def _extract_band_gap_ev(model_output: Any) -> float | None:
-    raw = None
-    if isinstance(model_output, dict):
-        raw = (
-            model_output.get("band_gap")
-            or model_output.get("band_gap_ev")
-            or model_output.get("gap")
-        )
-    elif hasattr(model_output, "get"):
-        try:
-            raw = (
-                model_output.get("band_gap")
-                or model_output.get("band_gap_ev")
-                or model_output.get("gap")
-            )
-        except Exception:
-            raw = None
-    if raw is None:
-        raw = model_output
-    parsed = _coerce_float(raw)
-    if parsed is None:
-        return None
-    return max(0.0, parsed)
-
-
-def _estimate_band_gap_ev_from_model_output(model_output: Any) -> float:
-    value = _extract_band_gap_ev(model_output)
+def _structure(features: dict[str, Any]) -> Any | None:
+    value = features.get("structure")
     if value is None:
-        return 1.2
-    return value
-
-
-def _matgl_model_candidates() -> list[str]:
-    candidates: list[str] = []
-    direct = os.getenv("MATSCI_MATGL_MODEL", _DEFAULT_BANDGAP_MODEL).strip()
-    candidates.append(direct or _DEFAULT_BANDGAP_MODEL)
-    extra = os.getenv("MATSCI_MATGL_MODEL_CANDIDATES", "").strip()
-    if extra:
-        candidates.extend([token.strip() for token in extra.split(",") if token.strip()])
-    dedup: list[str] = []
-    seen: set[str] = set()
-    for name in candidates:
-        if name not in seen:
-            dedup.append(name)
-            seen.add(name)
-    return dedup
-
-
-def _load_model_from_torch_hub(model_name: str) -> tuple[Any | None, str | None]:
-    if Path(model_name).exists():
-        return None, "torch_hub_skipped_local_path"
-
-    try:
-        import torch
-    except Exception as exc:
-        return None, f"torch_import_failed:{exc}"
-
-    try:
-        model = torch.hub.load("materialsvirtuallab/matgl", model_name)
-        return model, None
-    except Exception as exc:
-        return None, f"torch_hub_load_failed:{exc}"
-
-
-def _load_matgl_bandgap_model() -> tuple[Any | None, str, str | None]:
-    global _MATGL_MODEL, _MATGL_MODEL_NAME, _MATGL_MODEL_SOURCE, _MATGL_LOAD_ERROR
-    if _MATGL_MODEL is not None:
-        return _MATGL_MODEL, _MATGL_MODEL_NAME, None
-    if _MATGL_LOAD_ERROR is not None:
-        return None, "", _MATGL_LOAD_ERROR
-
-    errors: list[str] = []
-    for candidate_name in _matgl_model_candidates():
-        model, torch_err = _load_model_from_torch_hub(candidate_name)
-        if model is not None:
-            _MATGL_MODEL = model
-            _MATGL_MODEL_NAME = candidate_name
-            _MATGL_MODEL_SOURCE = "torch_hub"
-            return _MATGL_MODEL, _MATGL_MODEL_NAME, None
-        if torch_err:
-            errors.append(f"{candidate_name}:{torch_err}")
-
-    try:
-        with _suppress_known_matgl_warnings():
-            import matgl
-    except Exception as exc:
-        _MATGL_LOAD_ERROR = f"matgl_import_failed:{exc}; {'; '.join(errors)}"
-        return None, "", _MATGL_LOAD_ERROR
-
-    for candidate_name in _matgl_model_candidates():
-        try:
-            if Path(candidate_name).name.startswith("MEGNet-"):
-                try:
-                    matgl.set_backend("DGL")
-                except Exception as exc:
-                    errors.append(f"{candidate_name}:set_backend_failed:{exc}")
-                    continue
-            with _suppress_known_matgl_warnings():
-                _MATGL_MODEL = matgl.load_model(candidate_name)
-            _MATGL_MODEL_NAME = candidate_name
-            _MATGL_MODEL_SOURCE = "matgl_load_model"
-            return _MATGL_MODEL, _MATGL_MODEL_NAME, None
-        except Exception as exc:
-            errors.append(f"{candidate_name}:{exc}")
-
-    _MATGL_LOAD_ERROR = "; ".join(errors) if errors else "matgl_model_not_found"
-    return None, "", _MATGL_LOAD_ERROR
-
-
-def _predict_with_matgl_compat(model: Any, structure: Any) -> tuple[float | None, str | None]:
-    """Compatibility fallback for older MEGNet checkpoints on newer MatGL runtimes."""
-    try:
-        import torch
-    except Exception as exc:
-        return None, f"matgl_compat_torch_import_failed:{exc}"
-
-    base_model = model.model if hasattr(model, "model") else model
-    element_types = getattr(base_model, "element_types", None)
-    cutoff = getattr(base_model, "cutoff", None)
-    if element_types is None or cutoff is None:
-        return None, "matgl_compat_missing_model_graph_params"
-
-    try:
-        with _suppress_known_matgl_warnings():
-            from matgl.ext._pymatgen_dgl import Structure2Graph
-    except Exception as exc:
-        return None, f"matgl_compat_graph_converter_import_failed:{exc}"
-
-    try:
-        graph_converter = Structure2Graph(element_types=element_types, cutoff=cutoff)
-        graph, lattice, _state_attr_default = graph_converter.get_graph(structure)
-        if "node_type" in graph.ndata:
-            graph.ndata["node_type"] = graph.ndata["node_type"].long()
-        if "pbc_offset" in graph.edata:
-            graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lattice[0])
-        if "frac_coords" in graph.ndata:
-            graph.ndata["pos"] = graph.ndata["frac_coords"] @ lattice[0]
-        output = model(g=graph, state_attr=torch.tensor([0], dtype=torch.long))
-    except Exception as exc:
-        return None, f"matgl_compat_predict_failed:{exc}"
-
-    parsed = _extract_band_gap_ev(output)
-    if parsed is None:
-        return None, "matgl_compat_output_missing_band_gap"
-    return parsed, None
-
-
-def _predict_with_matgl_model(structure: Any) -> tuple[float | None, str | None]:
-    model, _model_name, load_error = _load_matgl_bandgap_model()
-    if model is None:
-        return None, load_error
-
-    try:
-        if hasattr(model, "predict_structure"):
-            output = model.predict_structure(structure)
-        elif hasattr(model, "predict"):
-            try:
-                output = model.predict(structure)
-            except Exception:
-                output = model.predict([structure])
-        elif callable(model):
-            try:
-                output = model(structure)
-            except Exception:
-                output = model([structure])
-        else:
-            return None, "matgl_model_has_no_predict_interface"
-    except Exception as exc:
-        compat_prediction, compat_error = _predict_with_matgl_compat(model, structure)
-        if compat_prediction is not None:
-            return compat_prediction, None
-        if compat_error:
-            return None, f"matgl_predict_failed:{exc}; {compat_error}"
-        return None, f"matgl_predict_failed:{exc}"
-
-    parsed = _extract_band_gap_ev(output)
-    if parsed is None:
-        return None, "matgl_output_missing_band_gap"
-    return parsed, None
-
-
-def _load_m3gnet_model() -> tuple[Any | None, str | None]:
-    global _M3GNET_MODEL, _M3GNET_LOAD_ERROR
-    if _M3GNET_MODEL is not None:
-        return _M3GNET_MODEL, None
-    if _M3GNET_LOAD_ERROR is not None:
-        return None, _M3GNET_LOAD_ERROR
-
-    try:
-        import torch
-
-        # Torch-hub fallback path kept for environments without matgl package.
-        try:
-            model_names = torch.hub.list("materialsvirtuallab/matgl")
-        except Exception:
-            model_names = []
-        candidate_names = [
-            name
-            for name in model_names
-            if "band" in name.lower() and "gap" in name.lower()
-        ]
-        model_name = candidate_names[0] if candidate_names else "m3gnet_band_gap"
-        _M3GNET_MODEL = torch.hub.load("materialsvirtuallab/matgl", model_name)
-        return _M3GNET_MODEL, None
-    except Exception as exc:
-        _M3GNET_LOAD_ERROR = str(exc)
-        return None, _M3GNET_LOAD_ERROR
-
-
-def _extract_structure(features: dict[str, Any]) -> Any | None:
-    structure = features.get("structure")
-    if structure is None:
         return None
-
-    if hasattr(structure, "lattice") and hasattr(structure, "sites"):
-        return structure
-
-    if isinstance(structure, dict):
+    if hasattr(value, "lattice") and hasattr(value, "sites"):
+        return value
+    if isinstance(value, dict):
         try:
             from pymatgen.core import Structure
 
-            return Structure.from_dict(structure)
+            return Structure.from_dict(value)
         except Exception:
             return None
-
     return None
 
 
-def _load_matgl_relaxer() -> tuple[Any | None, str | None]:
-    global _MATGL_RELAXER, _MATGL_RELAXER_ERROR
-    if _MATGL_RELAXER is not None:
-        return _MATGL_RELAXER, None
-    if _MATGL_RELAXER_ERROR is not None:
-        return None, _MATGL_RELAXER_ERROR
-
-    relax_model_name = os.getenv(
-        "MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"
-    ).strip()
-    try:
-        with _suppress_known_matgl_warnings():
-            import matgl
-            from matgl.ext.ase import Relaxer
-    except Exception as exc:
-        _MATGL_RELAXER_ERROR = f"matgl_relax_import_failed:{exc}"
-        return None, _MATGL_RELAXER_ERROR
-
-    try:
-        with _suppress_known_matgl_warnings():
-            potential = matgl.load_model(relax_model_name)
+def _gap(value: Any) -> float | None:
+    if isinstance(value, dict):
+        value = next((value[key] for key in ("band_gap", "band_gap_ev", "gap") if value.get(key) is not None), None)
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        value = value[0]
+    if hasattr(value, "item"):
         try:
-            _MATGL_RELAXER = Relaxer(potential=potential)
+            value = value.item()
         except Exception:
-            _MATGL_RELAXER = Relaxer(potential)
-        return _MATGL_RELAXER, None
-    except Exception as exc:
-        _MATGL_RELAXER_ERROR = f"matgl_relaxer_init_failed:{exc}"
-        return None, _MATGL_RELAXER_ERROR
-
-
-def _maybe_relax_structure(
-    structure: Any, enable_relaxation: bool, max_steps: int
-) -> tuple[Any, bool]:
-    if not enable_relaxation:
-        return structure, False
-
+            return None
     try:
-        relaxer, err = _load_matgl_relaxer()
-        if relaxer is None:
-            _ = err
-            return structure, False
-
-        if hasattr(relaxer, "relax"):
-            try:
-                result = relaxer.relax(structure, steps=max_steps)
-            except TypeError:
-                result = relaxer.relax(structure)
-        else:
-            return structure, False
-
-        if isinstance(result, dict):
-            relaxed = (
-                result.get("final_structure")
-                or result.get("relaxed_structure")
-                or result.get("structure")
-            )
-        else:
-            relaxed = result
-        if relaxed is not None and hasattr(relaxed, "lattice") and hasattr(relaxed, "sites"):
-            return relaxed, True
-        return structure, False
-    except Exception:
-        return structure, False
+        gap = float(value)
+    except (TypeError, ValueError):
+        return None
+    return gap if math.isfinite(gap) and gap >= 0 else None
 
 
-def structure_predict_m3gnet(
-    formula: str,
-    goal: str,
-    features: dict[str, Any] | None = None,
-    enable_relaxation: bool = False,
-    relaxation_max_steps: int = 200,
-) -> PredictedProperties:
-    """Band-gap prediction path with MatGL-first and torch-hub fallback."""
-    features = features or {}
-    structure = _extract_structure(features)
+def _calculate_matgl(features: dict[str, Any], *, relax: bool, max_steps: int) -> tuple[float | None, str | None]:
+    structure = _structure(features)
     if structure is None:
-        return _heuristic_fallback(formula, goal, reason="missing_structure")
-
-    structure, was_relaxed = _maybe_relax_structure(
-        structure,
-        enable_relaxation=enable_relaxation,
-        max_steps=relaxation_max_steps,
-    )
-
-    matgl_gap_ev, matgl_err = _predict_with_matgl_model(structure)
-    if matgl_gap_ev is not None:
-        backend = "matgl_band_gap"
-        if _MATGL_MODEL_NAME:
-            backend = f"{backend}:{_MATGL_MODEL_NAME}"
-        if _MATGL_MODEL_SOURCE:
-            backend = f"{backend}:{_MATGL_MODEL_SOURCE}"
-        return PredictedProperties(
-            band_gap_ev=matgl_gap_ev,
-            uncertainty=1.0 if was_relaxed else 1.2,
-            backend=f"{backend}_relaxed" if was_relaxed else backend,
-        )
-
-    model, load_error = _load_m3gnet_model()
+        return None, "MP structure is missing or invalid."
+    model, error = _load_model()
     if model is None:
-        reason = (
-            "matgl_and_m3gnet_unavailable"
-            if matgl_err is not None
-            else "m3gnet_model_unavailable"
-        )
-        return _heuristic_fallback(formula, goal, reason=reason)
-
+        return None, error
     try:
+        if relax:
+            import matgl
+            from matgl.ext._ase_pyg import Relaxer
+
+            relax_name = os.getenv("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2")
+            result = Relaxer(potential=matgl.load_model(relax_name)).relax(structure, steps=max_steps)
+            structure = result["final_structure"]
         if hasattr(model, "predict_structure"):
-            model_output = model.predict_structure(structure)
+            output = model.predict_structure(structure)
+        elif hasattr(model, "predict"):
+            output = model.predict(structure)
         else:
-            # Some wrappers expose callable model interfaces.
-            model_output = model(structure)
-    except Exception:
-        reason = (
-            "matgl_and_m3gnet_inference_error"
-            if matgl_err is not None
-            else "m3gnet_inference_error"
-        )
-        return _heuristic_fallback(formula, goal, reason=reason)
-
-    band_gap_ev = _estimate_band_gap_ev_from_model_output(model_output)
-    uncertainty = 4.0 if load_error is None else 6.0
-    return PredictedProperties(
-        band_gap_ev=band_gap_ev,
-        uncertainty=uncertainty,
-        backend="m3gnet_structure_relaxed" if was_relaxed else "m3gnet_structure",
-    )
-
-
-def _candidate_sort_key(material_id: str) -> tuple[int, str]:
-    digits = "".join(ch for ch in material_id if ch.isdigit())
-    return (int(digits) if digits else 10**12, material_id)
-
-
-def _is_matgl_atom_eligible(nsites: Any, max_atoms: int) -> bool:
-    return isinstance(nsites, (int, float)) and int(nsites) < max_atoms
+            output = model(structure)
+    except Exception as exc:
+        return None, f"MatGL calculation failed: {exc}"
+    gap = _gap(output)
+    return (gap, None) if gap is not None else (None, "MatGL output has no valid band gap.")
 
 
 class PropertyPredictor:
-    @staticmethod
-    def _select_matgl_indices(payload: PropertyPredictorInput) -> tuple[set[int], set[int]]:
-        matgl_needed: list[int] = []
-        if payload.calculate_matgl and payload.recalculate_top_n is not None:
-            requested = min(len(payload.candidates), payload.recalculate_top_n)
-            matgl_needed = list(range(requested))
-        else:
-            for idx, candidate in enumerate(payload.candidates):
-                mp_gap = candidate.features.get("mp_band_gap_ev")
-                if payload.calculate_matgl or mp_gap is None:
-                    matgl_needed.append(idx)
-
-        eligible = [
-            idx
-            for idx in matgl_needed
-            if _is_matgl_atom_eligible(
-                payload.candidates[idx].features.get("nsites"), payload.matgl_max_atoms
-            )
-        ]
-        eligible_sorted = sorted(
-            eligible,
-            key=lambda i: _candidate_sort_key(payload.candidates[i].material_id),
-        )
-        selected = set(eligible_sorted[: payload.matgl_max_recalc_entries])
-        return selected, set(matgl_needed)
-
     def run(self, payload: PropertyPredictorInput) -> PropertyPredictorOutput:
-        predictions: list[PropertyPredictionRecord] = []
-        fallback_count = 0
-        used_mp_count = 0
-        used_matgl_count = 0
-        forced_matgl_count = 0
-        matgl_skipped_count = 0
-        matgl_selected_indices, matgl_needed_indices = self._select_matgl_indices(payload)
-        selected_material_ids: list[str] = []
-        skipped_material_ids: list[str] = []
-
-        for idx, candidate in enumerate(payload.candidates):
-            mp_gap = candidate.features.get("mp_band_gap_ev")
-            nsites = candidate.features.get("nsites")
-            has_mp_gap = mp_gap is not None
-            needs_matgl = idx in matgl_needed_indices
-            selected_for_matgl = idx in matgl_selected_indices
-
-            candidate.features.pop("matgl_skipped_reason", None)
-            candidate.features.pop("matgl_band_gap_ev", None)
-            candidate.features["matgl_forced"] = bool(payload.calculate_matgl)
-
-            if not needs_matgl:
-                if has_mp_gap:
-                    predicted = PredictedProperties(
-                        band_gap_ev=float(mp_gap),
-                        uncertainty=0.2,
-                        backend="materials_project_band_gap",
-                    )
-                    used_mp_count += 1
-                    candidate.features["band_gap_source"] = "materials_project"
-                else:
-                    predicted = _heuristic_fallback(
-                        candidate.formula,
-                        payload.goal,
-                        reason="not_selected_for_matgl_recalc",
-                    )
-                    fallback_count += 1
-                    candidate.features["band_gap_source"] = "fallback"
-                predictions.append(
-                    PropertyPredictionRecord(candidate=candidate, predicted=predicted)
-                )
-                continue
-
-            if selected_for_matgl:
-                predicted = structure_predict_m3gnet(
-                    formula=candidate.formula,
-                    goal=payload.goal,
-                    features=candidate.features,
-                    enable_relaxation=payload.enable_relaxation,
-                    relaxation_max_steps=payload.relaxation_max_steps,
-                )
-                selected_material_ids.append(candidate.material_id)
-                if payload.calculate_matgl:
-                    forced_matgl_count += 1
-                if predicted.backend.startswith("m3gnet_structure_fallback:"):
-                    fallback_count += 1
-                    if has_mp_gap and payload.preserve_mp_gap_on_matgl_failure:
-                        predicted = PredictedProperties(
-                            band_gap_ev=float(mp_gap),
-                            uncertainty=0.4,
-                            backend="materials_project_band_gap",
-                        )
-                        used_mp_count += 1
-                        candidate.features["band_gap_source"] = "materials_project"
-                    else:
-                        candidate.features["band_gap_source"] = "fallback"
-                else:
-                    used_matgl_count += 1
-                    candidate.features["matgl_band_gap_ev"] = predicted.band_gap_ev
-                    candidate.features["band_gap_source"] = "matgl"
-            else:
-                matgl_skipped_count += 1
-                skipped_material_ids.append(candidate.material_id)
-                is_atom_count_eligible = _is_matgl_atom_eligible(
-                    nsites, payload.matgl_max_atoms
-                )
-                reason = (
-                    "atoms_too_high_or_missing_nsites"
-                    if not is_atom_count_eligible
-                    else "recalc_limit_reached"
-                )
-                candidate.features["matgl_skipped_reason"] = reason
-                if has_mp_gap:
-                    predicted = PredictedProperties(
-                        band_gap_ev=float(mp_gap),
-                        uncertainty=0.4,
-                        backend="materials_project_band_gap",
-                    )
-                    used_mp_count += 1
-                    candidate.features["band_gap_source"] = "materials_project"
-                else:
-                    predicted = _heuristic_fallback(candidate.formula, payload.goal, reason)
-                    fallback_count += 1
-                    candidate.features["band_gap_source"] = "fallback"
-
-            predictions.append(
-                PropertyPredictionRecord(candidate=candidate, predicted=predicted)
+        if payload.calculate_matgl and len(payload.candidates) > payload.matgl_max_recalc_entries:
+            raise MatGLCalculationError(
+                "matgl_limit_exceeded",
+                f"MatGL requested for {len(payload.candidates)} structures; limit is {payload.matgl_max_recalc_entries}.",
             )
+
+        predictions: list[PropertyPredictionRecord] = []
+        failures = 0
+        for candidate in payload.candidates:
+            mp_gap = _gap(candidate.features.get("mp_band_gap_ev"))
+            candidate.features["band_gap_source"] = "materials_project" if mp_gap is not None else "unknown"
+            candidate.features.pop("matgl_band_gap_ev", None)
+            candidate.features.pop("matgl_error", None)
+            candidate.features.pop("gap_difference_ev", None)
+            predicted = PredictedProperties(band_gap_ev=mp_gap, backend=candidate.features["band_gap_source"])
+            if payload.calculate_matgl:
+                nsites = candidate.features.get("nsites")
+                if not isinstance(nsites, (int, float)) or nsites >= payload.matgl_max_atoms:
+                    gap, error = None, f"Structure exceeds the {payload.matgl_max_atoms} atom limit or atom count is missing."
+                else:
+                    gap, error = _calculate_matgl(
+                        candidate.features,
+                        relax=payload.enable_relaxation,
+                        max_steps=payload.relaxation_max_steps,
+                    )
+                if error is not None:
+                    failures += 1
+                    candidate.features["matgl_error"] = error
+                    candidate.features["band_gap_source"] = "matgl_failed"
+                    predicted = PredictedProperties(backend="matgl_failed", error=error)
+                else:
+                    candidate.features["matgl_band_gap_ev"] = gap
+                    candidate.features["band_gap_source"] = "matgl"
+                    if mp_gap is not None:
+                        candidate.features["gap_difference_ev"] = round(gap - mp_gap, 6)
+                    predicted = PredictedProperties(band_gap_ev=gap, backend="matgl")
+            predictions.append(PropertyPredictionRecord(candidate=candidate, predicted=predicted))
 
         provenance = ToolCallProvenance(
             tool_name="property_predictor",
-            input_payload={
-                "goal": payload.goal,
-                "candidate_ids": [c.material_id for c in payload.candidates],
-            },
+            input_payload={"candidate_ids": [candidate.material_id for candidate in payload.candidates]},
             output_summary={
-                "backend": "hybrid_mp_then_matgl",
+                "source": "matgl" if payload.calculate_matgl else "materials_project",
                 "prediction_count": len(predictions),
-                "fallback_count": fallback_count,
-                "used_mp_count": used_mp_count,
-                "used_matgl_count": used_matgl_count,
-                "forced_matgl_count": forced_matgl_count,
-                "matgl_skipped_count": matgl_skipped_count,
-                "matgl_selected_material_ids": selected_material_ids,
-                "matgl_skipped_material_ids": skipped_material_ids,
-                "relaxation_enabled": payload.enable_relaxation,
+                "matgl_failure_count": failures,
             },
         )
         return PropertyPredictorOutput(predictions=predictions, provenance=provenance)

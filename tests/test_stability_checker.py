@@ -18,7 +18,7 @@ def test_stability_checker_prefers_mp_energy_above_hull():
                     formula="AlN",
                     features={"mp_energy_above_hull": 0.012, "nsites": 8},
                 ),
-                predicted=PredictedProperties(band_gap_ev=5.7, uncertainty=0.2, backend="mp"),
+                predicted=PredictedProperties(band_gap_ev=5.7, backend="mp"),
             )
         ],
         constraints=DiscoveryConstraints(max_energy_above_hull=0.05),
@@ -43,7 +43,7 @@ def test_stability_checker_missing_hull_returns_unknown():
                     formula="Fe2VAl",
                     features={"mp_energy_above_hull": None, "nsites": 12},
                 ),
-                predicted=PredictedProperties(band_gap_ev=1.3, uncertainty=1.0, backend="matgl"),
+                predicted=PredictedProperties(band_gap_ev=1.3, backend="matgl"),
             )
         ],
         constraints=DiscoveryConstraints(max_energy_above_hull=0.2),
@@ -69,7 +69,7 @@ def test_stability_checker_uses_default_threshold_without_retrieval_constraint()
                     formula="ZnO",
                     features={"mp_energy_above_hull": 0.08, "nsites": 4},
                 ),
-                predicted=PredictedProperties(band_gap_ev=3.2, uncertainty=0.2, backend="mp"),
+                predicted=PredictedProperties(band_gap_ev=3.2, backend="mp"),
             ),
             PropertyPredictionRecord(
                 candidate=Candidate(
@@ -77,7 +77,7 @@ def test_stability_checker_uses_default_threshold_without_retrieval_constraint()
                     formula="ZnS",
                     features={"mp_energy_above_hull": 0.12, "nsites": 4},
                 ),
-                predicted=PredictedProperties(band_gap_ev=3.5, uncertainty=0.2, backend="mp"),
+                predicted=PredictedProperties(band_gap_ev=3.5, backend="mp"),
             ),
         ],
         constraints=DiscoveryConstraints(),

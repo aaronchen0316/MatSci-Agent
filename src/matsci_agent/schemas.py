@@ -53,7 +53,7 @@ class DiscoveryConstraints(BaseModel):
     min_band_gap_ev: float | None = Field(default=None, ge=0)
     calculate_matgl: bool = False
     max_energy_above_hull: float | None = Field(default=None, ge=0)
-    top_k: int = Field(default=5, ge=1, le=100)
+    top_k: int = Field(default=5, ge=1, le=30)
     mp_filters: MPFilters = Field(default_factory=MPFilters)
 
 
@@ -63,13 +63,12 @@ class ParsedDiscoveryIntent(BaseModel):
 
 
 class DiscoveryRequest(BaseModel):
-    research_goal: str = Field(min_length=5)
+    research_goal: str = Field(min_length=5, max_length=500)
     constraints: DiscoveryConstraints = Field(default_factory=DiscoveryConstraints)
 
 
 class ExecutionPolicy(BaseModel):
     calculate_matgl: bool = False
-    recalculate_top_n: int | None = Field(default=None, ge=1, le=100)
     matgl_max_recalc_entries: int = Field(default=10, ge=1, le=100)
     matgl_max_atoms: int = Field(default=50, ge=1, le=500)
     enable_relaxation: bool = False
@@ -123,9 +122,9 @@ class Candidate(BaseModel):
 
 
 class PredictedProperties(BaseModel):
-    band_gap_ev: float = Field(ge=0)
-    uncertainty: float = Field(ge=0)
+    band_gap_ev: float | None = Field(default=None, ge=0)
     backend: str
+    error: str | None = None
 
 
 class StabilityResult(BaseModel):
@@ -175,6 +174,9 @@ class DiscoveryResponse(BaseModel):
     research_goal: str
     constraints: DiscoveryConstraints
     status: Literal["success", "partial", "failed", "unsupported"]
+    reason_code: str | None = None
+    data_source: str | None = None
+    request_id: str | None = None
     iterations: int
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     candidates: list[RankedCandidate] = Field(default_factory=list)
@@ -196,10 +198,13 @@ class DiscoveryFullResponse(DiscoveryResponse):
 class CandidateBandGapSummary(BaseModel):
     material_id: str
     formula: str
-    band_gap_ev: float = Field(ge=0)
+    band_gap_ev: float | None = Field(default=None, ge=0)
     mp_band_gap_ev: float | None = Field(default=None, ge=0)
     matgl_band_gap_ev: float | None = Field(default=None, ge=0)
     band_gap_source: str | None = None
+    matgl_error: str | None = None
+    gap_difference_ev: float | None = None
+    source: Literal["materials_project", "mock"] = "materials_project"
     energy_above_hull: float | None = None
     is_stable: bool | None = None
     stability_source: str | None = None
@@ -210,9 +215,47 @@ class CandidateBandGapSummary(BaseModel):
 
 class DiscoverySummaryResponse(BaseModel):
     status: Literal["success", "partial", "failed", "unsupported"] = "success"
+    reason_code: str | None = None
+    data_source: str | None = None
+    request_id: str | None = None
     candidates: list[CandidateBandGapSummary] = Field(default_factory=list)
     messages: list[str] = Field(default_factory=list)
     unsupported_reason: str | None = None
+
+
+def summary_from_result(result: DiscoveryResponse) -> DiscoverySummaryResponse:
+    return DiscoverySummaryResponse(
+        status=result.status,
+        reason_code=result.reason_code,
+        data_source=result.data_source,
+        request_id=result.request_id,
+        candidates=[
+            CandidateBandGapSummary(
+                material_id=item.candidate.material_id,
+                formula=item.candidate.formula,
+                band_gap_ev=item.predicted_properties.band_gap_ev,
+                mp_band_gap_ev=item.candidate.features.get("mp_band_gap_ev"),
+                matgl_band_gap_ev=item.candidate.features.get("matgl_band_gap_ev"),
+                band_gap_source=item.candidate.features.get("band_gap_source"),
+                matgl_error=item.candidate.features.get("matgl_error"),
+                gap_difference_ev=item.candidate.features.get("gap_difference_ev"),
+                source=item.candidate.source,
+                energy_above_hull=item.stability.energy_above_hull,
+                is_stable=item.stability.is_stable,
+                stability_source=item.stability.source,
+                has_multiple_entries=item.candidate.has_multiple_entries,
+                entry_count=item.candidate.entry_count,
+                properties=item.candidate.features.get("properties", {}),
+            )
+            for item in result.candidates
+        ],
+        messages=result.messages,
+        unsupported_reason=(
+            result.capability_assessment.reason_message
+            if result.capability_assessment is not None and not result.capability_assessment.supported
+            else None
+        ),
+    )
 
 
 class MPRetrieverInput(BaseModel):
@@ -226,6 +269,7 @@ class MPRetrieverInput(BaseModel):
 class MPRetrieverOutput(BaseModel):
     candidates: list[Candidate]
     provenance: ToolCallProvenance
+    reason_code: str | None = None
 
 
 class PolicyFilterInput(BaseModel):
@@ -261,8 +305,6 @@ class PropertyPredictorInput(BaseModel):
     candidates: list[Candidate]
     goal: str
     calculate_matgl: bool = False
-    preserve_mp_gap_on_matgl_failure: bool = False
-    recalculate_top_n: int | None = Field(default=None, ge=1, le=100)
     matgl_max_recalc_entries: int = Field(default=10, ge=1, le=100)
     matgl_max_atoms: int = Field(default=50, ge=1, le=500)
     enable_relaxation: bool = False
@@ -293,22 +335,3 @@ class StabilityRecord(BaseModel):
 class StabilityCheckerOutput(BaseModel):
     records: list[StabilityRecord]
     provenance: ToolCallProvenance
-
-
-class BandGapBenchmarkMetrics(BaseModel):
-    sample_size: int = 0
-    mae: float | None = None
-    rmse: float | None = None
-    rank_correlation: float | None = None
-    failure_count: int = 0
-    skipped_count: int = 0
-    mp_passthrough_count: int = 0
-    matgl_count: int = 0
-    fallback_count: int = 0
-
-
-class BandGapBenchmarkArtifact(BaseModel):
-    mode: Literal["small", "full"]
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    metrics: BandGapBenchmarkMetrics
-    rows: list[dict[str, Any]] = Field(default_factory=list)

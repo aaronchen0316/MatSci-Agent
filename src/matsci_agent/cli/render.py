@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
 from rich.console import Console
 from rich.json import JSON
 from rich.panel import Panel
@@ -17,7 +19,7 @@ def render_demo(
 ) -> None:
     console.print(
         Panel.fit(
-            f"[bold]Status:[/bold] {response.status}\n[bold]Goal:[/bold] {request.research_goal}",
+            f"[bold]Status:[/bold] {response.status}\n[bold]Reason:[/bold] {response.reason_code or '-'}\n[bold]Goal:[/bold] {request.research_goal}",
             title="MatSci Demo",
         )
     )
@@ -31,9 +33,12 @@ def render_demo(
     table.add_column("Rank", justify="right")
     table.add_column("Material")
     table.add_column("Formula")
-    if request.constraints.calculate_matgl:
+    show_matgl = request.constraints.calculate_matgl or any(candidate.matgl_band_gap_ev is not None or candidate.matgl_error for candidate in response.candidates)
+    if show_matgl:
         table.add_column("MP Gap", justify="right")
         table.add_column("MatGL Gap", justify="right")
+        table.add_column("Difference", justify="right")
+        table.add_column("MatGL status")
     else:
         table.add_column("Band Gap (eV)", justify="right")
     table.add_column("Source")
@@ -41,25 +46,32 @@ def render_demo(
     table.add_column("Hull")
     table.add_column("Stable")
     table.add_column("Properties")
-    for idx, candidate in enumerate(response.candidates, start=1):
+    groups: dict[str, list] = defaultdict(list)
+    for candidate in response.candidates:
+        groups[candidate.formula].append(candidate)
+    for idx, (formula, entries) in enumerate(groups.items(), start=1):
+        candidate = entries[0]
         row = [
             str(idx),
-            candidate.material_id,
-            candidate.formula,
+            candidate.material_id if len(entries) == 1 else "multiple structures",
+            formula,
         ]
-        if request.constraints.calculate_matgl:
+        if show_matgl:
+            failed = sum(entry.matgl_error is not None for entry in entries)
             row.extend([
-                _fmt(candidate.mp_band_gap_ev),
-                _fmt(candidate.matgl_band_gap_ev),
+                _fmt_values(entry.mp_band_gap_ev for entry in entries),
+                _fmt_values(entry.matgl_band_gap_ev for entry in entries),
+                _fmt_values(entry.gap_difference_ev for entry in entries),
+                f"failed: {failed}" if failed else "calculated",
             ])
         else:
-            row.append(f"{candidate.band_gap_ev:.3f}")
+            row.append(_fmt_values(entry.band_gap_ev for entry in entries))
         row.extend([
-            candidate.band_gap_source or "-",
-            str(candidate.entry_count),
-            _fmt(candidate.energy_above_hull),
-            _fmt(candidate.is_stable),
-            _fmt_properties(candidate.properties),
+            candidate.source,
+            str(len(entries)),
+            _fmt_values(entry.energy_above_hull for entry in entries),
+            _fmt(candidate.is_stable) if len(entries) == 1 else "varies",
+            _fmt_properties(candidate.properties) if len(entries) == 1 else "see API or operator",
         ])
         table.add_row(*row)
     if response.candidates:
@@ -75,7 +87,7 @@ def render_operator(
 ) -> None:
     console.print(
         Panel.fit(
-            f"[bold]Status:[/bold] {response.status}\n[bold]Goal:[/bold] {response.research_goal}",
+            f"[bold]Status:[/bold] {response.status}\n[bold]Reason:[/bold] {response.reason_code or '-'}\n[bold]Goal:[/bold] {response.research_goal}",
             title="MatSci Operator",
         )
     )
@@ -218,6 +230,8 @@ def _render_ranked_candidates(console: Console, response: DiscoveryFullResponse)
     if _response_uses_matgl_columns(response):
         table.add_column("MP Gap", justify="right")
         table.add_column("MatGL Gap", justify="right")
+        table.add_column("Difference", justify="right")
+        table.add_column("MatGL error")
     else:
         table.add_column("Band Gap (eV)", justify="right")
     table.add_column("Backend")
@@ -235,10 +249,12 @@ def _render_ranked_candidates(console: Console, response: DiscoveryFullResponse)
                 [
                     _fmt(candidate.candidate.features.get("mp_band_gap_ev")),
                     _fmt(candidate.candidate.features.get("matgl_band_gap_ev")),
+                    _fmt(candidate.candidate.features.get("gap_difference_ev")),
+                    candidate.candidate.features.get("matgl_error") or "-",
                 ]
             )
         else:
-            row.append(f"{candidate.predicted_properties.band_gap_ev:.3f}")
+            row.append(_fmt(candidate.predicted_properties.band_gap_ev))
         row.extend(
             [
                 candidate.predicted_properties.backend,
@@ -267,6 +283,15 @@ def _fmt(value: object) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _fmt_values(values) -> str:
+    known = sorted({float(value) for value in values if isinstance(value, (int, float))})
+    if not known:
+        return "unknown"
+    if len(known) == 1:
+        return _fmt(known[0])
+    return f"{_fmt(known[0])} to {_fmt(known[-1])}"
 
 
 def _fmt_properties(value: object) -> str:

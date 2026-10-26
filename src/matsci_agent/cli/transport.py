@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -10,6 +11,7 @@ from matsci_agent.schemas import (
     DiscoveryRequest,
     DiscoveryResponse,
     DiscoverySummaryResponse,
+    summary_from_result,
 )
 from matsci_agent.workflow.graph import DiscoveryWorkflow
 
@@ -75,32 +77,7 @@ def _run_full_http(request: DiscoveryRequest, api_url: str) -> DiscoveryFullResp
 
 
 def _build_summary_response(result: DiscoveryResponse) -> DiscoverySummaryResponse:
-    return DiscoverySummaryResponse(
-        status=result.status,
-        candidates=[
-            CandidateBandGapSummary(
-                material_id=rc.candidate.material_id,
-                formula=rc.candidate.formula,
-                band_gap_ev=rc.predicted_properties.band_gap_ev,
-                mp_band_gap_ev=rc.candidate.features.get("mp_band_gap_ev"),
-                matgl_band_gap_ev=rc.candidate.features.get("matgl_band_gap_ev"),
-                band_gap_source=rc.candidate.features.get("band_gap_source"),
-                energy_above_hull=rc.stability.energy_above_hull,
-                is_stable=rc.stability.is_stable,
-                stability_source=rc.stability.source,
-                has_multiple_entries=rc.candidate.has_multiple_entries,
-                entry_count=rc.candidate.entry_count,
-            )
-            for rc in result.candidates
-        ],
-        messages=result.messages,
-        unsupported_reason=(
-            result.capability_assessment.reason_message
-            if result.capability_assessment is not None
-            and not result.capability_assessment.supported
-            else None
-        ),
-    )
+    return summary_from_result(result)
 
 
 def _join_url(api_url: str, path: str) -> str:
@@ -118,10 +95,13 @@ def _post_json(
         raise CLITransportError("Missing HTTP target URL.")
 
     request_data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if os.getenv("MATSCI_API_TOKEN"):
+        headers["X-API-Key"] = os.environ["MATSCI_API_TOKEN"]
     request = urllib.request.Request(
         target,
         data=request_data,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method=method,
     )
     try:

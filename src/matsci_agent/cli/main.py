@@ -4,12 +4,12 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from matsci_agent.cli import doctor, render, scenarios, transport
+from matsci_agent.cli import doctor, examples, render, transport
 from matsci_agent.schemas import DiscoveryConstraints, DiscoveryRequest
 
 app = typer.Typer(help="MatSci operator/demo CLI.")
-scenario_app = typer.Typer(help="Built-in demo scenarios.")
-app.add_typer(scenario_app, name="scenarios")
+example_app = typer.Typer(help="Built-in example requests.")
+app.add_typer(example_app, name="examples")
 
 console = Console()
 
@@ -78,41 +78,41 @@ def doctor_cmd(
         raise typer.Exit(code=1)
 
 
-@scenario_app.command("list")
-def list_scenarios() -> None:
-    for scenario in scenarios.SCENARIOS.values():
-        console.print(f"  {scenario.name}: {scenario.description}")
-        if scenario.prereq_note:
-            console.print(f"  prereqs: {scenario.prereq_note}")
+@example_app.command("list")
+def list_examples() -> None:
+    for example in examples.EXAMPLES.values():
+        console.print(f"  {example.name}: {example.description}")
+        if example.prereq_note:
+            console.print(f"  prereqs: {example.prereq_note}")
 
 
-@scenario_app.command("run")
-def run_scenario(
-    name: str = typer.Argument(..., help="Built-in scenario name."),
+@example_app.command("run")
+def run_example(
+    name: str = typer.Argument(..., help="Built-in example name."),
     api_url: str | None = typer.Option(None, "--api-url"),
 ) -> None:
-    scenario = scenarios.get_scenario(name)
-    if scenario is None:
-        _fail(f"Unknown scenario: {name}")
+    example = examples.get_example(name)
+    if example is None:
+        _fail(f"Unknown example: {name}")
 
     notes: list[str] = []
-    if api_url and scenario.enable_policy_filter:
+    if api_url and example.enable_policy_filter:
         notes.append("HTTP mode uses server-side policy filtering. Remote LLM credentials are required for band-gap screening.")
-    if scenario.name == "matgl_recalc":
+    if example.name == "matgl_recalc":
         checks = doctor.run_doctor_checks(api_url=None)
         missing = [check.detail for check in checks if check.name in {"MatGL", "PyTorch", "DGL"} and check.status != "PASS"]
         if missing:
-            notes.append("MatGL scenario conditional. Local prereqs incomplete.")
+            notes.append("MatGL example conditional. Local prereqs incomplete.")
             notes.extend(missing)
     try:
         response = transport.run_summary(
-            scenario.request,
+            example.request,
             api_url=api_url,
-            enable_policy_filter=scenario.enable_policy_filter,
+            enable_policy_filter=example.enable_policy_filter,
         )
     except transport.CLITransportError as exc:
         _fail(str(exc))
-    render.render_demo(console, scenario.request, response, notes=notes)
+    render.render_demo(console, example.request, response, notes=notes)
 
 
 def _build_request(

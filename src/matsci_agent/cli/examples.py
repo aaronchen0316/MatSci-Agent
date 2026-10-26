@@ -6,7 +6,7 @@ from matsci_agent.schemas import DiscoveryConstraints, DiscoveryRequest
 
 
 @dataclass(frozen=True)
-class Scenario:
+class Example:
     name: str
     description: str
     request: DiscoveryRequest
@@ -14,8 +14,8 @@ class Scenario:
     enable_policy_filter: bool = False
 
 
-SCENARIOS: dict[str, Scenario] = {
-    "basic_success": Scenario(
+EXAMPLES: dict[str, Example] = {
+    "basic_success": Example(
         name="basic_success",
         description="Stable retrieval-first semiconductor shortlist.",
         request=DiscoveryRequest(
@@ -28,7 +28,7 @@ SCENARIOS: dict[str, Scenario] = {
             ),
         ),
     ),
-    "policy_filter": Scenario(
+    "policy_filter": Example(
         name="policy_filter",
         description="Show single LLM chemistry screening on a band-gap request.",
         request=DiscoveryRequest(
@@ -43,7 +43,7 @@ SCENARIOS: dict[str, Scenario] = {
         prereq_note="Needs remote LLM credentials because policy filter now fails closed without them.",
         enable_policy_filter=True,
     ),
-    "unsupported_request": Scenario(
+    "unsupported_request": Example(
         name="unsupported_request",
         description="Exercise structured refusal for unsupported simulation requests.",
         request=DiscoveryRequest(
@@ -51,7 +51,7 @@ SCENARIOS: dict[str, Scenario] = {
             constraints=DiscoveryConstraints(top_k=3),
         ),
     ),
-    "matgl_recalc": Scenario(
+    "matgl_recalc": Example(
         name="matgl_recalc",
         description="Force local MatGL recalculation path when structures and deps are available.",
         request=DiscoveryRequest(
@@ -67,5 +67,5 @@ SCENARIOS: dict[str, Scenario] = {
 }
 
 
-def get_scenario(name: str) -> Scenario | None:
-    return SCENARIOS.get(name)
+def get_example(name: str) -> Example | None:
+    return EXAMPLES.get(name)

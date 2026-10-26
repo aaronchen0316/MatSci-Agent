@@ -37,7 +37,6 @@ class PromptCase:
     expected_required_elements: tuple[str, ...] = ()
     expected_banned_elements: tuple[str, ...] = ()
     expected_calculate_matgl: bool | None = None
-    expected_recalculate_top_n: int | None = None
     expected_top_k: int | None = None
     require_candidates: bool = True
     require_known_and_unknown_stability: bool = False
@@ -114,8 +113,6 @@ class PromptQARetriever:
         ]
 
     def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
-        banned = {el.lower() for el in payload.constraints.banned_elements}
-        required = {el.lower() for el in payload.constraints.required_elements}
         excluded_ids = set(payload.exclude_material_ids)
         limit = payload.limit_override or (payload.constraints.top_k * self.request_limit_multiplier)
 
@@ -123,14 +120,7 @@ class PromptQARetriever:
             candidate.model_copy(deep=True)
             for candidate in self.pool
             if candidate.material_id not in excluded_ids
-            if not (MPRetriever._extract_elements(candidate.formula) & banned)
-            if required.issubset(MPRetriever._extract_elements(candidate.formula))
-            if MPRetriever._passes_goal_semantics(
-                goal=payload.research_goal,
-                element_set=MPRetriever._extract_elements(candidate.formula),
-                mp_band_gap_ev=candidate.features.get("mp_band_gap_ev"),
-                min_band_gap_ev=payload.constraints.min_band_gap_ev,
-            )
+            if MPRetriever.passes_constraints(candidate, payload.constraints)
         ]
         filtered.sort(
             key=lambda candidate: (
@@ -145,7 +135,7 @@ class PromptQARetriever:
             output_summary={
                 "candidate_count": len(filtered),
                 "source": "prompt_qa_fixture",
-                "fallback_used": True,
+                "fallback_used": False,
             },
         )
         return MPRetrieverOutput(candidates=filtered, provenance=provenance)
@@ -213,8 +203,8 @@ QA_CASES = [
         name="recalculate_top_two",
         goal="Find semiconductor materials and recalculate the top 2 candidates with MatGL.",
         parser_constraints=DiscoveryConstraints(calculate_matgl=True),
+        expected_status="failed",
         expected_calculate_matgl=True,
-        expected_recalculate_top_n=2,
     ),
     PromptCase(
         name="top_seven_no_recalc",
@@ -233,7 +223,7 @@ QA_CASES = [
         ),
         expected_banned_elements=("Si",),
         expected_top_k=10,
-        require_known_and_unknown_stability=True,
+        require_known_and_unknown_stability=False,
     ),
     PromptCase(
         name="carbon_not_cobalt",
@@ -332,9 +322,14 @@ def _extract_elements(formula: str) -> set[str]:
 
 @pytest.mark.parametrize("case", QA_CASES, ids=[case.name for case in QA_CASES])
 def test_prompt_qa_full_endpoint(case: PromptCase, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(api_main, "workflow", _qa_workflow())
+    monkeypatch.setattr(api_main, "workflow_factory", _qa_workflow)
+    request = {"research_goal": case.goal}
+    if case.name == "recalculate_top_two":
+        monkeypatch.setenv("MATSCI_ENABLE_MATGL", "1")
+        monkeypatch.setattr(api_main, "_matgl_missing", lambda: [])
+        request["constraints"] = {"calculate_matgl": True}
 
-    response = client.post("/discover/full", json={"research_goal": case.goal})
+    response = client.post("/discover/full", json=request)
 
     assert response.status_code == 200
     body = response.json()
@@ -360,8 +355,6 @@ def test_prompt_qa_full_endpoint(case: PromptCase, monkeypatch: pytest.MonkeyPat
         assert plan["practicality_mode"] == case.expected_practicality_mode
     if case.expected_calculate_matgl is not None:
         assert plan["execution_policy"]["calculate_matgl"] is case.expected_calculate_matgl
-    if case.expected_recalculate_top_n is not None:
-        assert plan["execution_policy"]["recalculate_top_n"] == case.expected_recalculate_top_n
     if case.expected_top_k is not None:
         assert parsed_constraints["top_k"] == case.expected_top_k
 
@@ -392,9 +385,14 @@ def test_prompt_qa_full_endpoint(case: PromptCase, monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.parametrize("case", QA_CASES, ids=[case.name for case in QA_CASES])
 def test_prompt_qa_compact_endpoint(case: PromptCase, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(api_main, "workflow", _qa_workflow())
+    monkeypatch.setattr(api_main, "workflow_factory", _qa_workflow)
+    request = {"research_goal": case.goal}
+    if case.name == "recalculate_top_two":
+        monkeypatch.setenv("MATSCI_ENABLE_MATGL", "1")
+        monkeypatch.setattr(api_main, "_matgl_missing", lambda: [])
+        request["constraints"] = {"calculate_matgl": True}
 
-    response = client.post("/discover", json={"research_goal": case.goal})
+    response = client.post("/discover", json=request)
 
     assert response.status_code == 200
     body = response.json()

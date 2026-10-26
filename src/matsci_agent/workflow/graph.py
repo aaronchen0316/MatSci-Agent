@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
-
-from langgraph.graph import END, START, StateGraph
+from collections import defaultdict
 
 from matsci_agent.agents.planner import ChemistryIntentAgent
 from matsci_agent.agents.reporter import ResultsReportingAgent
@@ -11,40 +9,45 @@ from matsci_agent.config import settings
 from matsci_agent.guardrails.capability import CapabilityGuardrail
 from matsci_agent.observability.mlflow_logger import MLflowLogger
 from matsci_agent.schemas import (
-    DEFAULT_STABILITY_HULL_THRESHOLD,
     Candidate,
     CapabilityAssessment,
+    DiscoveryConstraints,
     DiscoveryFullResponse,
     DiscoveryRequest,
     DiscoveryResponse,
-    DiscoveryConstraints,
-    DiscoveryPlan,
     MPRetrieverInput,
     PolicyFilterInput,
     PolicyFilterRecord,
-    PredictedProperties,
     PropertyPredictorInput,
-    PropertyPredictionRecord,
     RankedCandidate,
     ReportSummary,
     SearchSpaceExpansionInput,
     SearchSpaceTarget,
     StabilityCheckerInput,
-    StabilityResult,
     ToolCallProvenance,
 )
-from matsci_agent.tools.mp_retriever import MPRetriever
+from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverError
 from matsci_agent.tools.policy_filter import PolicyFilter, PolicyFilterError
-from matsci_agent.tools.property_predictor import PropertyPredictor
+from matsci_agent.tools.property_predictor import MatGLCalculationError, PropertyPredictor
 from matsci_agent.tools.stability_checker import StabilityChecker
-from matsci_agent.workflow.state import DiscoveryState
 
-_INITIAL_POLICY_FILTER_BATCH_LIMIT = 10
-_ZERO_PASS_RELAXED_RETRIEVAL_LIMIT = 100
-_ZERO_PASS_RELAXED_SCREEN_LIMIT = 50
+
+def _formula_key(formula: str) -> str:
+    try:
+        from pymatgen.core import Composition
+
+        return Composition(formula).reduced_formula
+    except Exception:
+        return formula
+
+
+def _number(value: object, missing: float) -> float:
+    return float(value) if isinstance(value, (int, float)) else missing
 
 
 class DiscoveryWorkflow:
+    """One pass: plan, retrieve, screen entries, select formulas, annotate, report."""
+
     def __init__(
         self,
         retriever: MPRetriever | None = None,
@@ -67,979 +70,217 @@ class DiscoveryWorkflow:
         self.capability_guardrail = capability_guardrail or CapabilityGuardrail()
         self.reporting_agent = reporting_agent or ResultsReportingAgent()
         self.search_expander = search_expander or SearchSpaceExpansionAgent()
-        self.enable_policy_filter = (
-            enable_policy_filter
-            if enable_policy_filter is not None
-            else True
-        )
-        self.graph = self._build_graph()
+        self.enable_policy_filter = True if enable_policy_filter is None else enable_policy_filter
 
-    def _build_graph(self):
-        workflow = StateGraph(DiscoveryState)
-        workflow.add_node("plan_intent", self._plan_intent)
-        workflow.add_node("assess_capability", self._assess_capability)
-        workflow.add_node("expand_search_space", self._expand_search_space)
-        workflow.add_node("retrieve", self._retrieve)
-        workflow.add_node("policy_filter", self._policy_filter)
-        workflow.add_node("summarize_mp_results", self._summarize_mp_results)
-        workflow.add_node("predict", self._predict)
-        workflow.add_node("check_stability", self._check_stability)
-        workflow.add_node("refine", self._refine)
-        workflow.add_node("report", self._report)
-        workflow.add_edge(START, "plan_intent")
-        workflow.add_edge("plan_intent", "assess_capability")
-        workflow.add_conditional_edges(
-            "assess_capability",
-            self._route_after_capability,
-            {"continue": "expand_search_space", "unsupported": "report"},
-        )
-        workflow.add_conditional_edges(
-            "expand_search_space",
-            self._route_after_search_space_expansion,
-            {"continue": "retrieve", "stop": "report"},
-        )
-        workflow.add_edge("retrieve", "policy_filter")
-        workflow.add_conditional_edges(
-            "policy_filter",
-            self._route_after_policy_filter,
-            {"predict": "predict", "mp_only": "summarize_mp_results", "stop": "report"},
-        )
-        workflow.add_edge("summarize_mp_results", "report")
-        workflow.add_edge("predict", "check_stability")
-        workflow.add_conditional_edges(
-            "check_stability",
-            self._route_after_stability,
-            {"done": "report", "retry": "refine"},
-        )
-        workflow.add_edge("refine", "retrieve")
-        workflow.add_edge("report", END)
-        return workflow.compile()
+    @staticmethod
+    def _formula_sort_key(entries: list[Candidate], constraints: DiscoveryConstraints, band_gap_task: bool) -> tuple[float, float, str]:
+        best_hull = min(_number(entry.features.get("mp_energy_above_hull"), 999.0) for entry in entries)
+        best_gap = max(_number(entry.features.get("mp_band_gap_ev"), -1.0) for entry in entries)
+        filters = constraints.mp_filters
+        if band_gap_task or filters.band_gap is not None:
+            target = -best_gap
+        elif filters.formation_energy is not None:
+            target = min(_number(entry.features.get("formation_energy"), 999.0) for entry in entries)
+        elif filters.density is not None:
+            values = [_number(entry.features.get("density"), -1.0) for entry in entries]
+            target = -max(values) if filters.density.min is not None and filters.density.max is None else min(values)
+        elif filters.volume is not None:
+            values = [_number(entry.features.get("volume"), -1.0) for entry in entries]
+            target = -max(values) if filters.volume.min is not None and filters.volume.max is None else min(values)
+        else:
+            target = best_hull
+        return (target, best_hull, _formula_key(entries[0].formula))
 
-    def _plan_intent(self, state: DiscoveryState) -> DiscoveryState:
-        request_constraints = state["request_constraints"]
-        plan = self.intent_agent.plan(
-            state["research_goal"],
-            request_constraints,
-            explicit_base_fields=set(request_constraints.model_fields_set),
-        )
-        self.logger.log_step(
-            "intent_agent",
-            metrics={"iteration": float(state["iteration"])},
-            params={
-                "task_class": plan.task_class,
-                "calculate_matgl": plan.execution_policy.calculate_matgl,
-                "recalculate_top_n": plan.execution_policy.recalculate_top_n or 0,
-            },
-        )
-        provenance = state.get("provenance", [])
-        provenance.append(
-            ToolCallProvenance(
-                tool_name="intent_agent",
-                input_payload={
-                    "research_goal": state["research_goal"],
-                    "explicit_constraints": request_constraints.model_dump(),
-                },
-                output_summary={
-                    "task_class": plan.task_class,
-                    "source_universe": plan.source_universe,
-                    "requested_material_class": plan.requested_material_class,
-                    "ranking_intent": plan.ranking_intent,
-                    "calculate_matgl": plan.execution_policy.calculate_matgl,
-                    "recalculate_top_n": plan.execution_policy.recalculate_top_n,
-                },
-            ).model_dump()
-        )
-        return {
-            "discovery_plan": plan,
-            "constraints": plan.parsed_constraints,
-            "provenance": provenance,
+    def _select_formulas(self, candidates: list[Candidate], constraints: DiscoveryConstraints, band_gap_task: bool) -> list[Candidate]:
+        grouped: dict[str, list[Candidate]] = defaultdict(list)
+        for candidate in candidates:
+            grouped[_formula_key(candidate.formula)].append(candidate)
+        ordered = sorted(grouped.values(), key=lambda entries: self._formula_sort_key(entries, constraints, band_gap_task))
+        selected: list[Candidate] = []
+        for entries in ordered[: constraints.top_k]:
+            entries.sort(key=lambda entry: (_number(entry.features.get("mp_energy_above_hull"), 999.0), -_number(entry.features.get("mp_band_gap_ev"), -1.0), entry.material_id))
+            for entry in entries:
+                entry.entry_count = len(entries)
+                entry.has_multiple_entries = len(entries) > 1
+                selected.append(entry)
+        return selected
+
+    def _screen(self, candidates: list[Candidate], plan, provenance: list[ToolCallProvenance]) -> tuple[list[Candidate], list[PolicyFilterRecord]]:
+        accepted: list[Candidate] = []
+        records: list[PolicyFilterRecord] = []
+        for start in range(0, len(candidates), 10):
+            payload = PolicyFilterInput(candidates=candidates[start:start + 10], discovery_plan=plan)
+            result = self.policy_filter.run(payload) if self.enable_policy_filter else self.policy_filter.skip(payload, policy="disabled_pass_through")
+            accepted.extend(result.filtered_candidates)
+            records.extend(result.records)
+            provenance.append(result.provenance)
+        return accepted, records
+
+    def _execute(self, request: DiscoveryRequest) -> dict:
+        messages: list[str] = []
+        provenance: list[ToolCallProvenance] = []
+        result: dict = {
+            "status": "failed", "reason_code": None, "messages": messages,
+            "provenance": provenance, "candidates": [], "raw_candidates": [],
+            "filtered_candidates": [], "filter_records": [], "search_space_targets": [],
+            "known_stability_present": None, "iterations": 1,
         }
+        with self.logger.run("discover"):
+            plan = self.intent_agent.plan(
+                request.research_goal,
+                request.constraints,
+                explicit_base_fields=set(request.constraints.model_fields_set),
+            )
+            constraints = plan.parsed_constraints
+            result.update(discovery_plan=plan, constraints=constraints)
+            capability = self.capability_guardrail.assess(plan)
+            result["capability_assessment"] = capability
+            if not capability.supported:
+                result.update(status="unsupported", reason_code="unsupported_request")
+                messages.append(capability.reason_message or "Unsupported request.")
+                result["report_summary"] = self.reporting_agent.report(plan, capability, [], 1)
+                return result
 
-    def _assess_capability(self, state: DiscoveryState) -> DiscoveryState:
-        plan = state["discovery_plan"]
-        capability = self.capability_guardrail.assess(plan)
-        self.logger.log_step(
-            "capability_guardrail",
-            metrics={
-                "supported": 1.0 if capability.supported else 0.0,
-                "iteration": float(state["iteration"]),
-            },
-            params={"task_class": plan.task_class},
-        )
-        messages = state.get("messages", [])
-        if not capability.supported and capability.reason_message:
-            messages.append(capability.reason_message)
-        provenance = state.get("provenance", [])
-        provenance.append(
-            ToolCallProvenance(
-                tool_name="capability_guardrail",
-                input_payload={"task_class": plan.task_class},
-                output_summary=capability.model_dump(),
-            ).model_dump()
-        )
-        return {
-            "capability_assessment": capability,
-            "messages": messages,
-            "provenance": provenance,
-        }
-
-    def _expand_search_space(self, state: DiscoveryState) -> DiscoveryState:
-        plan = state["discovery_plan"]
-        target_count = min(max(state["constraints"].top_k * 3, state["constraints"].top_k), 30)
-        payload = SearchSpaceExpansionInput(
-            research_goal=state["research_goal"],
-            discovery_plan=plan,
-            target_count=target_count,
-        )
-        provenance = state.get("provenance", [])
-        messages = state.get("messages", [])
-        try:
-            result = self.search_expander.expand(payload)
-        except SearchSpaceExpansionError as exc:
-            messages.append(f"Search-space expansion failed: {exc.message}")
-            provenance.append(
-                ToolCallProvenance(
-                    tool_name="search_space_expander",
-                    input_payload=payload.model_dump(mode="json"),
-                    output_summary={
-                        "failure_code": exc.code,
-                        "raw_response_preview": exc.raw_response_preview,
-                    },
-                ).model_dump()
-            )
-            self.logger.log_step(
-                "search_space_expander",
-                metrics={"target_count": 0.0, "iteration": float(state["iteration"])},
-                params={"failure_code": exc.code},
-            )
-            return {
-                "search_space_targets": [],
-                "messages": messages,
-                "provenance": provenance,
-                "status": "failed",
-            }
-
-        self.logger.log_step(
-            "search_space_expander",
-            metrics={
-                "target_count": float(len(result.targets)),
-                "iteration": float(state["iteration"]),
-            },
-        )
-        provenance.append(result.provenance.model_dump())
-        return {
-            "search_space_targets": [target.model_dump() for target in result.targets],
-            "provenance": provenance,
-        }
-
-    def _retrieve(self, state: DiscoveryState) -> DiscoveryState:
-        payload = MPRetrieverInput(
-            research_goal=state["research_goal"],
-            constraints=state["constraints"],
-            search_space_targets=[
-                SearchSpaceTarget.model_validate(target)
-                for target in state.get("search_space_targets", [])
-            ],
-        )
-        result = self.retriever.retrieve(payload)
-        self.logger.log_step(
-            "mp_retriever",
-            metrics={
-                "candidate_count": len(result.candidates),
-                "iteration": float(state["iteration"]),
-            },
-        )
-        provenance = state.get("provenance", [])
-        provenance.append(result.provenance.model_dump())
-        return {
-            "raw_candidates": [c.model_dump() for c in result.candidates],
-            "provenance": provenance,
-        }
-
-    def _policy_filter(self, state: DiscoveryState) -> DiscoveryState:
-        all_candidates = [Candidate.model_validate(c) for c in state.get("raw_candidates", [])]
-        plan = state["discovery_plan"]
-        if not self.enable_policy_filter:
-            result = self.policy_filter.skip(
-                PolicyFilterInput(candidates=all_candidates, discovery_plan=plan),
-                policy="disabled_mvp_pass_through",
-            )
-            provenance = state.get("provenance", [])
-            provenance.append(result.provenance.model_dump())
-            return {
-                "filtered_candidates": [c.model_dump() for c in result.filtered_candidates],
-                "filter_records": [r.model_dump() for r in result.records],
-                "provenance": provenance,
-                "filter_replenish_attempts": 0,
-            }
-        if plan.task_class != "band_gap_screening":
-            result = self.policy_filter.run(
-                PolicyFilterInput(candidates=all_candidates, discovery_plan=plan)
-            )
-            provenance = state.get("provenance", [])
-            provenance.append(result.provenance.model_dump())
-            return {
-                "filtered_candidates": [c.model_dump() for c in result.filtered_candidates],
-                "filter_records": [r.model_dump() for r in result.records],
-                "provenance": provenance,
-                "filter_replenish_attempts": 0,
-            }
-
-        provenance = state.get("provenance", [])
-        messages = state.get("messages", [])
-        selected = self._select_filter_candidates(
-            all_candidates,
-            limit=max(_INITIAL_POLICY_FILTER_BATCH_LIMIT, state["constraints"].top_k),
-            constraints=state["constraints"],
-        )
-        try:
-            first_result = self.policy_filter.run(
-                PolicyFilterInput(candidates=selected, discovery_plan=plan)
-            )
-        except PolicyFilterError as exc:
-            return self._policy_filter_failed_state(
-                state,
-                batch_size=len(selected),
-                replenish_attempts=0,
-                error=exc,
-            )
-
-        accepted = list(first_result.filtered_candidates)
-        records = list(first_result.records)
-        seen_ids = {candidate.material_id for candidate in selected}
-        replenish_attempts = 0
-
-        if not accepted:
-            replenish_attempts = 1
-            relaxed_limit = max(
-                _ZERO_PASS_RELAXED_RETRIEVAL_LIMIT,
-                state["constraints"].top_k * 20,
-            )
-            refill = self.retriever.retrieve(
-                MPRetrieverInput(
-                    research_goal=state["research_goal"],
-                    constraints=state["constraints"],
-                    exclude_material_ids=sorted(seen_ids),
-                    limit_override=relaxed_limit,
-                    search_space_targets=[
-                        SearchSpaceTarget.model_validate(target)
-                        for target in state.get("search_space_targets", [])
-                    ],
-                )
-            )
-            refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
-            refill_selected = self._select_filter_candidates(
-                refill_candidates,
-                limit=max(_ZERO_PASS_RELAXED_SCREEN_LIMIT, state["constraints"].top_k),
-                constraints=state["constraints"],
-            )
-            if refill_selected:
-                try:
-                    second_result = self.policy_filter.run(
-                        PolicyFilterInput(candidates=refill_selected, discovery_plan=plan)
+            try:
+                expansion = self.search_expander.expand(
+                    SearchSpaceExpansionInput(
+                        research_goal=request.research_goal,
+                        discovery_plan=plan,
+                        target_count=min(constraints.top_k * 3, 30),
                     )
-                except PolicyFilterError as exc:
-                    return self._policy_filter_failed_state(
-                        state,
-                        batch_size=len(refill_selected),
-                        replenish_attempts=1,
-                        error=exc,
-                    )
-                accepted.extend(second_result.filtered_candidates)
-                records.extend(second_result.records)
-                provenance.append(
-                    ToolCallProvenance(
-                        tool_name="mp_retriever_replenish",
-                        input_payload={
-                            "research_goal": state["research_goal"],
-                            "exclude_material_ids": sorted(seen_ids),
-                            "limit_override": relaxed_limit,
-                            "trigger": "zero_policy_filter_passes",
-                        },
-                        output_summary={
-                            "candidate_count": len(refill_candidates),
-                            "screened_count": len(refill_selected),
-                        },
-                    ).model_dump()
                 )
-                provenance.append(second_result.provenance.model_dump())
-        elif len(accepted) < state["constraints"].top_k:
-            replenish_attempts = 1
-            deficit = state["constraints"].top_k - len(accepted)
-            refill = self.retriever.retrieve(
-                MPRetrieverInput(
-                    research_goal=state["research_goal"],
-                    constraints=state["constraints"],
-                    exclude_material_ids=sorted(seen_ids),
-                    limit_override=max(10, deficit),
-                    search_space_targets=[
-                        SearchSpaceTarget.model_validate(target)
-                        for target in state.get("search_space_targets", [])
-                    ],
-                )
-            )
-            refill_candidates = [Candidate.model_validate(c.model_dump()) for c in refill.candidates]
-            refill_selected = self._select_filter_candidates(
-                refill_candidates,
-                limit=10,
-                constraints=state["constraints"],
-            )
-            if refill_selected:
-                try:
-                    second_result = self.policy_filter.run(
-                        PolicyFilterInput(candidates=refill_selected, discovery_plan=plan)
-                    )
-                except PolicyFilterError as exc:
-                    return self._policy_filter_failed_state(
-                        state,
-                        batch_size=len(refill_selected),
-                        replenish_attempts=1,
-                        error=exc,
-                    )
-                accepted.extend(second_result.filtered_candidates)
-                records.extend(second_result.records)
-                provenance.append(
-                    ToolCallProvenance(
-                        tool_name="mp_retriever_replenish",
-                        input_payload={
-                            "research_goal": state["research_goal"],
-                            "exclude_material_ids": sorted(seen_ids),
-                            "limit_override": max(10, deficit),
-                        },
-                        output_summary={
-                            "candidate_count": len(refill_candidates),
-                        },
-                    ).model_dump()
-                )
-                provenance.append(second_result.provenance.model_dump())
+            except SearchSpaceExpansionError as exc:
+                result.update(reason_code="search_expansion_failed")
+                messages.append(f"Search-space expansion failed: {exc.message}")
+                provenance.append(ToolCallProvenance(tool_name="search_space_expander", input_payload={}, output_summary={"failure_code": exc.code}))
+                return result
+            result["search_space_targets"] = expansion.targets
+            provenance.append(expansion.provenance)
+            if not expansion.targets:
+                result["reason_code"] = "search_expansion_failed"
+                messages.append("Search-space expansion returned no targets.")
+                return result
 
-        self.logger.log_step(
-            "policy_filter",
-            metrics={
-                "input_count": float(len(selected)),
-                "filtered_count": float(len(accepted)),
-                "excluded_count": float(len(records) - len(accepted)),
-                "iteration": float(state["iteration"]),
-            },
-            params={"policy": first_result.provenance.output_summary.get("policy", "unknown")},
-        )
-        provenance.append(first_result.provenance.model_dump())
-        excluded_count = len(records) - len(accepted)
-        if excluded_count:
-            messages.append(
-                f"Policy filter excluded {excluded_count} candidate(s) using {first_result.provenance.output_summary.get('policy', 'unknown')}."
-            )
-        if replenish_attempts:
-            messages.append("Policy filter ran one replenish pass to fill requested candidate count.")
-        next_state: DiscoveryState = {
-            "filtered_candidates": [c.model_dump() for c in accepted],
-            "filter_records": [r.model_dump() for r in records],
-            "messages": messages,
-            "provenance": provenance,
-            "filter_replenish_attempts": replenish_attempts,
-        }
-        if not accepted:
-            messages.append("Chemistry filter kept zero candidates for this request.")
-            next_state["status"] = "partial"
-        return next_state
+            try:
+                retrieval = self.retriever.retrieve(
+                    MPRetrieverInput(
+                        research_goal=request.research_goal,
+                        constraints=constraints,
+                        search_space_targets=expansion.targets,
+                    )
+                )
+            except MPRetrieverError as exc:
+                result["reason_code"] = exc.code
+                messages.append(str(exc))
+                provenance.append(ToolCallProvenance(tool_name="mp_retriever", input_payload={}, output_summary={"failure_code": exc.code}))
+                return result
+            provenance.append(retrieval.provenance)
+            result["raw_candidates"] = retrieval.candidates
+            result["data_source"] = retrieval.provenance.output_summary.get("source", "unknown")
+            if not retrieval.candidates:
+                result.update(status="success", reason_code=retrieval.reason_code or "no_matches")
+                messages.append("No Materials Project candidates matched the request." if result["reason_code"] == "no_matches" else "No candidates passed the requested MP constraints.")
+                return result
 
-    def _summarize_mp_results(self, state: DiscoveryState) -> DiscoveryState:
-        candidates = [
-            Candidate.model_validate(candidate)
-            for candidate in state.get("filtered_candidates", state.get("raw_candidates", []))
-        ]
-        ranked: list[RankedCandidate] = []
-        stability_threshold = state["constraints"].max_energy_above_hull
-        if stability_threshold is None:
-            stability_threshold = DEFAULT_STABILITY_HULL_THRESHOLD
-        for candidate in sorted(candidates, key=self._mp_property_sort_key):
-            properties = self._candidate_properties(candidate)
-            candidate.features["properties"] = properties
-            hull = candidate.features.get("mp_energy_above_hull")
-            stability = StabilityResult(
-                energy_above_hull=float(hull) if isinstance(hull, (int, float)) else None,
-                is_stable=(
-                    float(hull) <= stability_threshold
-                    if isinstance(hull, (int, float))
-                    else None
-                ),
-                method="materials_project_summary_properties",
-                source="materials_project" if isinstance(hull, (int, float)) else "unknown",
-            )
-            band_gap = candidate.features.get("mp_band_gap_ev")
-            predicted = PredictedProperties(
-                band_gap_ev=float(band_gap) if isinstance(band_gap, (int, float)) else 0.0,
-                uncertainty=0.0,
-                backend="mp_summary",
-            )
-            ranked.append(
+            try:
+                accepted, records = self._screen(retrieval.candidates, plan, provenance)
+            except PolicyFilterError as exc:
+                result["reason_code"] = "chemistry_screen_failed"
+                messages.append(f"Chemistry filter failed: {exc.message}")
+                provenance.append(ToolCallProvenance(tool_name="policy_filter", input_payload={}, output_summary={"failure_code": exc.code}))
+                return result
+            result["filter_records"] = records
+            if not accepted:
+                result.update(status="success", reason_code="chemistry_no_pass")
+                messages.append("Chemistry screening rejected all retrieved structures.")
+                return result
+
+            accepted = [candidate for candidate in accepted if MPRetriever.passes_constraints(candidate, constraints)]
+            result["filtered_candidates"] = accepted
+            if not accepted:
+                result.update(status="success", reason_code="final_constraint_no_pass")
+                messages.append("No structures passed the final constraints.")
+                return result
+
+            selected = self._select_formulas(accepted, constraints, plan.task_class == "band_gap_screening")
+            for candidate in selected:
+                candidate.features["properties"] = {
+                    key: value for key, value in candidate.features.items()
+                    if key in {"formation_energy", "density", "volume", "efermi", "total_magnetization", "crystal_system", "spacegroup_symbol", "spacegroup_number", "nsites"} and value is not None
+                }
+
+            try:
+                prediction = self.predictor.run(
+                    PropertyPredictorInput(
+                        candidates=selected,
+                        goal=request.research_goal,
+                        calculate_matgl=plan.execution_policy.calculate_matgl,
+                        matgl_max_recalc_entries=plan.execution_policy.matgl_max_recalc_entries,
+                        matgl_max_atoms=plan.execution_policy.matgl_max_atoms,
+                        enable_relaxation=plan.execution_policy.enable_relaxation,
+                        relaxation_max_steps=plan.execution_policy.relaxation_max_steps,
+                    )
+                )
+            except MatGLCalculationError as exc:
+                result["reason_code"] = exc.code
+                messages.append(str(exc))
+                return result
+            provenance.append(prediction.provenance)
+            stability = self.stability_checker.run(StabilityCheckerInput(predictions=prediction.predictions, constraints=constraints))
+            provenance.append(stability.provenance)
+            ranked = [
                 RankedCandidate(
-                    rank=len(ranked) + 1,
-                    candidate=candidate,
-                    predicted_properties=predicted,
-                    stability=stability,
-                    score=self._mp_property_score(candidate),
-                    provenance={"iteration": state["iteration"], "path": "mp_property_screening"},
+                    rank=index,
+                    candidate=record.candidate,
+                    predicted_properties=record.predicted,
+                    stability=record.stability,
+                    score=round((_number(record.candidate.features.get("mp_band_gap_ev"), 0.0) if plan.task_class == "band_gap_screening" else 0.0) - 100 * _number(record.stability.energy_above_hull, 0.0), 4),
+                    provenance={"source": record.candidate.source},
                 )
-            )
-        provenance = state.get("provenance", [])
-        provenance.append(
-            ToolCallProvenance(
-                tool_name="mp_property_summarizer",
-                input_payload={"candidate_count": len(candidates)},
-                output_summary={"ranked_count": min(len(ranked), state["constraints"].top_k)},
-            ).model_dump()
-        )
-        return {
-            "ranked_candidates": ranked[: state["constraints"].top_k],
-            "known_stability_present": any(r.stability.is_stable is not None for r in ranked),
-            "provenance": provenance,
-        }
-
-    def _predict(self, state: DiscoveryState) -> DiscoveryState:
-        candidates = [
-            Candidate.model_validate(c)
-            for c in state.get("filtered_candidates", state.get("raw_candidates", []))
-        ]
-        plan = state.get("discovery_plan")
-        if isinstance(plan, DiscoveryPlan):
-            policy = plan.execution_policy
-        else:
-            policy = None
-        calculate_matgl = (
-            policy.calculate_matgl if policy is not None else state["constraints"].calculate_matgl
-        )
-        if calculate_matgl:
-            candidates = self._finalize_mp_shortlist_candidates(candidates, state)
-        payload = PropertyPredictorInput(
-            candidates=candidates,
-            goal=state["research_goal"],
-            calculate_matgl=calculate_matgl,
-            preserve_mp_gap_on_matgl_failure=calculate_matgl,
-            recalculate_top_n=(policy.recalculate_top_n if policy is not None else None),
-            matgl_max_recalc_entries=(
-                policy.matgl_max_recalc_entries
-                if policy is not None
-                else settings.matgl_max_recalc_entries
-            ),
-            matgl_max_atoms=(
-                policy.matgl_max_atoms if policy is not None else settings.matgl_max_atoms
-            ),
-            enable_relaxation=(
-                policy.enable_relaxation
-                if policy is not None
-                else settings.matgl_enable_relaxation
-            ),
-            relaxation_max_steps=(
-                policy.relaxation_max_steps
-                if policy is not None
-                else settings.matgl_relaxation_max_steps
-            ),
-        )
-        result = self.predictor.run(payload)
-        self.logger.log_step(
-            "property_predictor",
-            metrics={
-                "prediction_count": len(result.predictions),
-                "iteration": float(state["iteration"]),
-            },
-            params={
-                "backend": result.provenance.output_summary.get("backend", "unknown"),
-            },
-        )
-        provenance = state.get("provenance", [])
-        provenance.append(result.provenance.model_dump())
-        return {
-            "predictions": [r.model_dump() for r in result.predictions],
-            "provenance": provenance,
-        }
-
-    def _check_stability(self, state: DiscoveryState) -> DiscoveryState:
-        payload = StabilityCheckerInput(
-            predictions=[
-                PropertyPredictionRecord.model_validate(record)
-                for record in state.get("predictions", [])
-            ],
-            constraints=state["constraints"],
-        )
-        result = self.stability_checker.run(payload)
-        ranked = self._rank_stability_records(
-            result.records,
-            constraints=state["constraints"],
-            iteration=state["iteration"],
-            apply_min_band_gap_filter=not self._matgl_enabled(state),
-        )
-
-        stable_found = any(r.stability.is_stable is True for r in ranked)
-        known_stability_present = any(r.stability.is_stable is not None for r in ranked)
-        messages = state.get("messages", [])
-        if ranked and not known_stability_present:
-            messages.append(
-                "Stability is unknown for returned candidates because MP energy_above_hull data is missing."
-            )
-        self.logger.log_step(
-            "stability_checker",
-            metrics={
-                "stable_count": sum(1 for r in ranked if r.stability.is_stable is True),
-                "ranked_count": len(ranked),
-                "iteration": float(state["iteration"]),
-            },
-        )
-        provenance = state.get("provenance", [])
-        provenance.append(result.provenance.model_dump())
-        return {
-            "ranked_candidates": ranked[: state["constraints"].top_k],
-            "stable_found": stable_found,
-            "messages": messages,
-            "known_stability_present": known_stability_present,
-            "provenance": provenance,
-        }
-
-    def _refine(self, state: DiscoveryState) -> DiscoveryState:
-        constraints = state["constraints"].model_copy(deep=True)
-        previous_threshold = constraints.max_energy_above_hull
-        if previous_threshold is not None:
-            constraints.max_energy_above_hull = min(previous_threshold + 0.03, 0.3)
-        if isinstance(state.get("discovery_plan"), DiscoveryPlan):
-            plan = state["discovery_plan"].model_copy(deep=True)
-            plan.parsed_constraints = constraints
-        else:
-            plan = None
-        iteration = state["iteration"] + 1
-        messages = state.get("messages", [])
-        if constraints.max_energy_above_hull is None:
-            messages.append(
-                f"No stable candidates at iteration {state['iteration']}; no explicit max_energy_above_hull constraint to relax."
-            )
-        else:
-            messages.append(
-                f"No stable candidates at iteration {state['iteration']}; relaxed max_energy_above_hull to {constraints.max_energy_above_hull:.2f}."
-            )
-        self.logger.log_step(
-            "refine",
-            metrics={
-                "iteration": float(iteration),
-                "max_energy_above_hull": constraints.max_energy_above_hull,
-            },
-        )
-        return {
-            "constraints": constraints,
-            "discovery_plan": plan,
-            "iteration": iteration,
-            "messages": messages,
-        }
-
-    def _report(self, state: DiscoveryState) -> DiscoveryState:
-        plan = state.get("discovery_plan") or DiscoveryPlan(
-            research_goal_raw=state["research_goal"],
-            parsed_constraints=state["constraints"],
-        )
-        capability = state.get("capability_assessment") or CapabilityAssessment(
-            supported=True
-        )
-        ranked = state.get("ranked_candidates", [])
-        preset_status = state.get("status")
-        if not capability.supported:
-            report = self.reporting_agent.report(
-                plan=plan,
-                capability=capability,
-                ranked_candidates=ranked,
-                iteration=state.get("iteration", 1),
-            )
-            status = "unsupported"
-        elif preset_status in {"failed", "partial"} and not ranked:
-            report = self._make_preexecution_report(state, preset_status)
-            status = preset_status
-        else:
-            report = self.reporting_agent.report(
-                plan=plan,
-                capability=capability,
-                ranked_candidates=ranked,
-                iteration=state.get("iteration", 1),
-            )
-            status = "success" if ranked else "failed"
-
-        messages = state.get("messages", [])
-        if not capability.supported:
-            if report.caveats:
-                messages.extend(report.caveats)
-        else:
-            messages.append(report.execution_summary)
-
-        provenance = state.get("provenance", [])
-        provenance.append(
-            ToolCallProvenance(
-                tool_name="reporting_agent",
-                input_payload={
-                    "task_class": plan.task_class,
-                    "candidate_count": len(ranked),
-                    "supported": capability.supported,
-                },
-                output_summary={
-                    "status": status,
-                    "caveat_count": len(report.caveats),
-                },
-            ).model_dump()
-        )
-        return {
-            "report_summary": report,
-            "status": status,
-            "messages": messages,
-            "provenance": provenance,
-        }
-
-    def _route_after_capability(self, state: DiscoveryState) -> str:
-        capability = state.get("capability_assessment")
-        if capability is not None and not capability.supported:
-            return "unsupported"
-        return "continue"
-
-    def _route_after_search_space_expansion(self, state: DiscoveryState) -> str:
-        if state.get("status") == "failed" and not state.get("search_space_targets"):
-            return "stop"
-        return "continue"
-
-    def _route_after_policy_filter(self, state: DiscoveryState) -> str:
-        if state.get("status") in {"failed", "partial"} and not state.get("filtered_candidates"):
-            return "stop"
-        plan = state.get("discovery_plan")
-        if isinstance(plan, DiscoveryPlan) and plan.task_class == "mp_property_screening":
-            return "mp_only"
-        return "predict"
-
-    def _route_after_stability(self, state: DiscoveryState) -> str:
-        return "done"
+                for index, record in enumerate(stability.records, start=1)
+            ]
+            result["candidates"] = ranked
+            result["known_stability_present"] = any(record.stability.is_stable is not None for record in ranked)
+            if ranked and not result["known_stability_present"]:
+                messages.append("Stability is unknown because MP energy above hull is missing.")
+            failures = sum(record.predicted.error is not None for record in stability.records)
+            if failures:
+                result["status"] = "failed" if failures == len(stability.records) else "partial"
+                result["reason_code"] = "matgl_calculation_failed"
+                messages.append(f"MatGL failed for {failures} of {len(stability.records)} structures.")
+            else:
+                result["status"] = "success"
+            result["report_summary"] = self.reporting_agent.report(plan, capability, ranked, 1)
+            return result
 
     def run(self, request: DiscoveryRequest) -> DiscoveryResponse:
-        final_state = self._invoke(request)
-        return self._build_response(request, final_state)
+        return self._response(request, self._execute(request))
 
     def run_full(self, request: DiscoveryRequest) -> DiscoveryFullResponse:
-        final_state = self._invoke(request)
-        ranked = final_state.get("ranked_candidates", [])
+        data = self._execute(request)
+        base = self._response(request, data)
         return DiscoveryFullResponse(
-            research_goal=request.research_goal,
-            constraints=final_state.get("constraints", request.constraints),
-            status=final_state.get("status", "failed"),
-            iterations=final_state.get("iteration", 1),
-            candidates=ranked,
-            provenance=[
-                ToolCallProvenance.model_validate(p)
-                for p in final_state.get("provenance", [])
-            ],
-            messages=final_state.get("messages", []),
-            discovery_plan=final_state.get("discovery_plan"),
-            capability_assessment=final_state.get("capability_assessment"),
-            report_summary=final_state.get("report_summary"),
-            raw_candidates=[
-                Candidate.model_validate(c)
-                for c in final_state.get("raw_candidates", [])
-            ],
-            filtered_candidates=[
-                Candidate.model_validate(c)
-                for c in final_state.get("filtered_candidates", [])
-            ],
-            filter_records=[
-                PolicyFilterRecord.model_validate(r)
-                for r in final_state.get("filter_records", [])
-            ],
-            search_space_targets=[
-                SearchSpaceTarget.model_validate(target)
-                for target in final_state.get("search_space_targets", [])
-            ],
-            known_stability_present=final_state.get("known_stability_present"),
+            **base.model_dump(),
+            raw_candidates=data["raw_candidates"],
+            filtered_candidates=data["filtered_candidates"],
+            filter_records=data["filter_records"],
+            search_space_targets=data["search_space_targets"],
+            known_stability_present=data["known_stability_present"],
         )
 
-    def _invoke(self, request: DiscoveryRequest) -> DiscoveryState:
-        initial_state: DiscoveryState = {
-            "research_goal": request.research_goal,
-            "request_constraints": request.constraints,
-            "constraints": request.constraints,
-            "iteration": 1,
-            "max_iterations": settings.max_iterations,
-            "messages": [],
-            "provenance": [],
-            "status": "failed",
-        }
-
-        with self.logger.run("discover"):
-            final_state = self.graph.invoke(initial_state)
-        return final_state
-
-    def _build_response(
-        self,
-        request: DiscoveryRequest,
-        final_state: DiscoveryState,
-    ) -> DiscoveryResponse:
-        ranked = final_state.get("ranked_candidates", [])
+    @staticmethod
+    def _response(request: DiscoveryRequest, data: dict) -> DiscoveryResponse:
         return DiscoveryResponse(
             research_goal=request.research_goal,
-            constraints=final_state.get("constraints", request.constraints),
-            status=final_state.get("status", "failed"),
-            iterations=final_state.get("iteration", 1),
-            candidates=ranked,
-            provenance=[
-                ToolCallProvenance.model_validate(p)
-                for p in final_state.get("provenance", [])
-            ],
-            messages=final_state.get("messages", []),
-            discovery_plan=final_state.get("discovery_plan"),
-            capability_assessment=final_state.get("capability_assessment"),
-            report_summary=final_state.get("report_summary"),
-        )
-
-    def _matgl_enabled(self, state: DiscoveryState) -> bool:
-        plan = state.get("discovery_plan")
-        if isinstance(plan, DiscoveryPlan):
-            return plan.execution_policy.calculate_matgl
-        return state["constraints"].calculate_matgl
-
-    def _finalize_mp_shortlist_candidates(
-        self,
-        candidates: list[Candidate],
-        state: DiscoveryState,
-    ) -> list[Candidate]:
-        if not candidates:
-            return []
-
-        baseline_predictions = [
-            PropertyPredictionRecord(
-                candidate=candidate.model_copy(deep=True),
-                predicted=PredictedProperties(
-                    band_gap_ev=float(candidate.features.get("mp_band_gap_ev") or 0.0),
-                    uncertainty=0.2 if candidate.features.get("mp_band_gap_ev") is not None else 1.0,
-                    backend=(
-                        "materials_project_band_gap"
-                        if candidate.features.get("mp_band_gap_ev") is not None
-                        else "materials_project_band_gap_missing"
-                    ),
-                ),
-            )
-            for candidate in candidates
-        ]
-        stability_result = self.stability_checker.run(
-            StabilityCheckerInput(
-                predictions=baseline_predictions,
-                constraints=state["constraints"],
-            )
-        )
-        ranked = self._rank_stability_records(
-            stability_result.records,
-            constraints=state["constraints"],
-            iteration=state["iteration"],
-            apply_min_band_gap_filter=False,
-        )
-        return [candidate.candidate for candidate in ranked[: state["constraints"].top_k]]
-
-    @staticmethod
-    def _rank_stability_records(
-        records,
-        *,
-        constraints: DiscoveryConstraints,
-        iteration: int,
-        apply_min_band_gap_filter: bool,
-    ) -> list[RankedCandidate]:
-        ranked: list[RankedCandidate] = []
-        min_band_gap_ev = constraints.min_band_gap_ev
-        for rec in sorted(
-            records,
-            key=lambda x: (
-                -x.predicted.band_gap_ev,
-                0 if x.stability.is_stable is True else 1 if x.stability.is_stable is None else 2,
-                (
-                    x.stability.energy_above_hull
-                    if x.stability.energy_above_hull is not None
-                    else 999.0
-                ),
-            ),
-        ):
-            if (
-                apply_min_band_gap_filter
-                and min_band_gap_ev is not None
-                and rec.predicted.band_gap_ev < min_band_gap_ev
-            ):
-                continue
-            hull_penalty = (
-                100.0 * rec.stability.energy_above_hull
-                if rec.stability.energy_above_hull is not None
-                else 0.0
-            )
-            score = rec.predicted.band_gap_ev - hull_penalty
-            ranked.append(
-                RankedCandidate(
-                    rank=len(ranked) + 1,
-                    candidate=rec.candidate,
-                    predicted_properties=rec.predicted,
-                    stability=rec.stability,
-                    score=round(score, 4),
-                    provenance={"iteration": iteration},
-                )
-            )
-        return ranked
-
-    @staticmethod
-    def _cheap_candidate_sort_key(
-        candidate: Candidate,
-        constraints: DiscoveryConstraints | None = None,
-    ) -> tuple[int, int, float, float, int, str]:
-        required_elements = {
-            str(token).lower()
-            for token in ((constraints.required_elements if constraints is not None else []) or [])
-        }
-        candidate_elements_raw = candidate.features.get("elements")
-        if isinstance(candidate_elements_raw, list) and candidate_elements_raw:
-            candidate_elements = {str(token).lower() for token in candidate_elements_raw}
-        else:
-            candidate_elements = MPRetriever._extract_elements(candidate.formula)
-        if required_elements and candidate_elements == required_elements:
-            element_fit = 0
-        elif required_elements and required_elements.issubset(candidate_elements):
-            element_fit = 1
-        else:
-            element_fit = 2
-        mp_gap = candidate.features.get("mp_band_gap_ev")
-        mp_hull = candidate.features.get("mp_energy_above_hull")
-        completeness = sum(
-            1
-            for key in ("elements", "mp_band_gap_ev", "mp_energy_above_hull", "nsites", "structure")
-            if candidate.features.get(key) is not None
-        )
-        return (
-            element_fit,
-            len(candidate_elements) if candidate_elements else 999,
-            -(float(mp_gap) if isinstance(mp_gap, (int, float)) else -1.0),
-            float(mp_hull) if isinstance(mp_hull, (int, float)) else 999.0,
-            -completeness,
-            candidate.material_id,
-        )
-
-    @staticmethod
-    def _candidate_properties(candidate: Candidate) -> dict[str, object]:
-        keys = [
-            "mp_band_gap_ev",
-            "mp_energy_above_hull",
-            "formation_energy",
-            "density",
-            "volume",
-            "efermi",
-            "total_magnetization",
-            "is_metal",
-            "is_stable",
-            "theoretical",
-            "deprecated",
-            "crystal_system",
-            "spacegroup_symbol",
-            "spacegroup_number",
-            "nsites",
-        ]
-        return {
-            key: candidate.features[key]
-            for key in keys
-            if candidate.features.get(key) is not None
-        }
-
-    @staticmethod
-    def _mp_property_sort_key(candidate: Candidate) -> tuple[int, float, float, float, str]:
-        hull = candidate.features.get("mp_energy_above_hull")
-        formation = candidate.features.get("formation_energy")
-        gap = candidate.features.get("mp_band_gap_ev")
-        stable_rank = 0 if isinstance(hull, (int, float)) and float(hull) <= 0.1 else 1
-        return (
-            stable_rank,
-            float(hull) if isinstance(hull, (int, float)) else 999.0,
-            float(formation) if isinstance(formation, (int, float)) else 999.0,
-            -(float(gap) if isinstance(gap, (int, float)) else -1.0),
-            candidate.material_id,
-        )
-
-    @staticmethod
-    def _mp_property_score(candidate: Candidate) -> float:
-        hull = candidate.features.get("mp_energy_above_hull")
-        formation = candidate.features.get("formation_energy")
-        gap = candidate.features.get("mp_band_gap_ev")
-        score = 0.0
-        if isinstance(gap, (int, float)):
-            score += float(gap)
-        if isinstance(hull, (int, float)):
-            score -= 100.0 * float(hull)
-        if isinstance(formation, (int, float)):
-            score -= abs(float(formation))
-        return round(score, 4)
-
-    def _select_filter_candidates(
-        self,
-        candidates: list[Candidate],
-        limit: int,
-        constraints: DiscoveryConstraints | None = None,
-    ) -> list[Candidate]:
-        return sorted(
-            candidates,
-            key=lambda candidate: self._cheap_candidate_sort_key(candidate, constraints),
-        )[:limit]
-
-    def _policy_filter_failed_state(
-        self,
-        state: DiscoveryState,
-        batch_size: int,
-        replenish_attempts: int,
-        error: PolicyFilterError,
-    ) -> DiscoveryState:
-        messages = state.get("messages", [])
-        messages.append(f"Chemistry filter failed: {error.message}")
-        provenance = state.get("provenance", [])
-        provenance.append(
-            ToolCallProvenance(
-                tool_name="policy_filter",
-                input_payload={
-                    "task_class": state["discovery_plan"].task_class,
-                    "batch_size": batch_size,
-                },
-                output_summary={
-                    "provider": self.policy_filter.provider,
-                    "model": self.policy_filter.model,
-                    "failure_code": error.code,
-                    "raw_response_preview": error.raw_response_preview,
-                    "replenish_attempts": replenish_attempts,
-                },
-            ).model_dump()
-        )
-        self.logger.log_step(
-            "policy_filter",
-            metrics={
-                "input_count": float(batch_size),
-                "filtered_count": 0.0,
-                "excluded_count": 0.0,
-                "iteration": float(state["iteration"]),
-            },
-            params={
-                "policy": "llm",
-                "failure_code": error.code,
-            },
-        )
-        return {
-            "filtered_candidates": [],
-            "filter_records": [],
-            "messages": messages,
-            "provenance": provenance,
-            "status": "failed",
-            "filter_replenish_attempts": replenish_attempts,
-        }
-
-    @staticmethod
-    def _make_preexecution_report(state: DiscoveryState, status: str) -> ReportSummary:
-        if status == "failed":
-            message = (
-                state.get("messages", [])[-1]
-                if state.get("messages")
-                else "Execution failed before prediction."
-            )
-            return ReportSummary(
-                scientific_summary=message,
-                execution_summary="Execution stopped before prediction.",
-                caveats=[],
-            )
-        return ReportSummary(
-            scientific_summary="Chemistry filter kept zero candidates for this request.",
-            execution_summary="Execution stopped after filtering because no candidates remained.",
-            caveats=[],
+            constraints=data.get("constraints", request.constraints),
+            status=data["status"],
+            reason_code=data["reason_code"],
+            data_source=data.get("data_source"),
+            iterations=data["iterations"],
+            candidates=data["candidates"],
+            provenance=data["provenance"],
+            messages=data["messages"],
+            discovery_plan=data.get("discovery_plan"),
+            capability_assessment=data.get("capability_assessment"),
+            report_summary=data.get("report_summary"),
         )

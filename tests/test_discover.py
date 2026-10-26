@@ -8,6 +8,8 @@ from matsci_agent.schemas import (
     DiscoveryConstraints,
     DiscoveryPlan,
     DiscoveryRequest,
+    FloatRange,
+    MPFilters,
     MPRetrieverInput,
     MPRetrieverOutput,
     ParsedDiscoveryIntent,
@@ -18,7 +20,8 @@ from matsci_agent.schemas import (
     SearchSpaceTarget,
     ToolCallProvenance,
 )
-from matsci_agent.tools.mp_retriever import MPRetriever, MPRetrieverConfig
+from matsci_agent.tools.mp_retriever import MPRetriever
+from tests.support import FixtureRetriever
 from matsci_agent.tools.policy_filter import PolicyFilter
 from matsci_agent.workflow.graph import DiscoveryWorkflow
 
@@ -58,9 +61,25 @@ def test_health():
     assert res.json()["status"] == "ok"
 
 
+def test_api_requires_configured_token_and_returns_request_id(monkeypatch):
+    monkeypatch.setenv("MATSCI_API_TOKEN", "test-secret")
+    payload = {"research_goal": "Calculate lithium diffusivity with molecular dynamics"}
+    assert client.post("/discover", json=payload).status_code == 401
+    response = client.post("/discover", json=payload, headers={"X-API-Key": "test-secret"})
+    assert response.status_code == 200
+    assert response.json()["request_id"] == response.headers["X-Request-ID"]
+
+
+def test_readiness_reports_missing_credentials(monkeypatch):
+    monkeypatch.delenv("MP_API_KEY", raising=False)
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert "MP_API_KEY" in response.json()["missing"]
+
+
 def test_discover_endpoint_returns_ranked_candidates():
     workflow = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(
             parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
         ),
@@ -86,7 +105,7 @@ def test_discover_endpoint_returns_ranked_candidates():
         search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
-    api_main.workflow = workflow
+    api_main.workflow_factory = lambda: workflow
     payload = {
         "research_goal": "Find semiconductor materials without silicon and band gap above 2 eV",
         "constraints": {
@@ -110,6 +129,9 @@ def test_discover_endpoint_returns_ranked_candidates():
             "mp_band_gap_ev",
             "matgl_band_gap_ev",
             "band_gap_source",
+            "matgl_error",
+            "gap_difference_ev",
+            "source",
             "energy_above_hull",
             "is_stable",
             "stability_source",
@@ -124,7 +146,7 @@ def test_discover_endpoint_returns_ranked_candidates():
 def test_workflow_recalculates_matgl_only_for_finalized_shortlist_and_keeps_membership():
     class FourCandidateRetriever(MPRetriever):
         def __init__(self):
-            super().__init__(MPRetrieverConfig(use_live_if_available=False))
+            super().__init__()
 
         def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
             candidates = [
@@ -186,7 +208,6 @@ def test_workflow_recalculates_matgl_only_for_finalized_shortlist_and_keeps_memb
                         candidate=cloned,
                         predicted=PredictedProperties(
                             band_gap_ev=gap,
-                            uncertainty=1.0,
                             backend="matgl_band_gap:test",
                         ),
                     )
@@ -241,9 +262,11 @@ def test_workflow_recalculates_matgl_only_for_finalized_shortlist_and_keeps_memb
     assert out.candidates[1].predicted_properties.band_gap_ev == 1.1
 
 
-def test_discover_endpoint_exposes_mp_and_matgl_gap_fields():
+def test_discover_endpoint_exposes_mp_and_matgl_gap_fields(monkeypatch):
+    monkeypatch.setenv("MATSCI_ENABLE_MATGL", "1")
+    monkeypatch.setattr(api_main, "_matgl_missing", lambda: [])
     workflow = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(
             parser_fn=lambda _goal: ParsedDiscoveryIntent(
                 requested_material_class="semiconductor",
@@ -266,7 +289,7 @@ def test_discover_endpoint_exposes_mp_and_matgl_gap_fields():
         search_expander=FakeSearchExpander(["AlN"]),
         enable_policy_filter=True,
     )
-    api_main.workflow = workflow
+    api_main.workflow_factory = lambda: workflow
 
     res = client.post(
         "/discover",
@@ -284,7 +307,7 @@ def test_discover_endpoint_exposes_mp_and_matgl_gap_fields():
 
 def test_workflow_can_still_skip_policy_filter_when_explicitly_disabled():
     wf = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(
             parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
         ),
@@ -306,7 +329,7 @@ def test_workflow_defaults_to_policy_filter_fails_closed_without_llm_credentials
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
     wf = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
     )
     req = DiscoveryRequest(
@@ -326,7 +349,7 @@ def test_workflow_defaults_to_policy_filter_fails_closed_without_llm_credentials
 
 
 def test_discover_endpoint_refuses_unsupported_diffusivity_request():
-    api_main.workflow = DiscoveryWorkflow()
+    api_main.workflow_factory = DiscoveryWorkflow
     payload = {
         "research_goal": "Estimate diffusivity in bulk materials with long molecular dynamics runs",
     }
@@ -340,7 +363,7 @@ def test_discover_endpoint_refuses_unsupported_diffusivity_request():
 
 def test_discover_full_endpoint_returns_debug_trace():
     workflow = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(
             parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
         ),
@@ -360,7 +383,7 @@ def test_discover_full_endpoint_returns_debug_trace():
         search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
-    api_main.workflow = workflow
+    api_main.workflow_factory = lambda: workflow
     payload = {
         "research_goal": "Find semiconductor materials",
         "constraints": {"top_k": 5},
@@ -391,7 +414,7 @@ def test_discover_full_endpoint_returns_debug_trace():
 def test_discover_endpoint_returns_generic_mp_properties():
     class GenericRetriever(MPRetriever):
         def __init__(self):
-            super().__init__(MPRetrieverConfig(use_live_if_available=False))
+            super().__init__()
 
         def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
             candidates = [
@@ -437,7 +460,7 @@ def test_discover_endpoint_returns_generic_mp_properties():
         search_expander=FakeSearchExpander(["CsSnI3"]),
         enable_policy_filter=True,
     )
-    api_main.workflow = workflow
+    api_main.workflow_factory = lambda: workflow
 
     res = client.post(
         "/discover",
@@ -451,7 +474,7 @@ def test_discover_endpoint_returns_generic_mp_properties():
 
 
 def test_discover_full_includes_capability_assessment_for_unsupported_request():
-    api_main.workflow = DiscoveryWorkflow()
+    api_main.workflow_factory = DiscoveryWorkflow
     payload = {
         "research_goal": "Estimate diffusivity in bulk materials with long molecular dynamics runs",
     }
@@ -469,13 +492,13 @@ def test_discover_full_includes_capability_assessment_for_unsupported_request():
 
 def test_discover_full_shows_filter_failure_trace():
     workflow = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
         search_expander=FakeSearchExpander(),
         enable_policy_filter=True,
     )
-    api_main.workflow = workflow
+    api_main.workflow_factory = lambda: workflow
     payload = {
         "research_goal": "Find semiconductor materials",
         "constraints": {"top_k": 3},
@@ -496,142 +519,12 @@ def test_discover_full_shows_filter_failure_trace():
     )
 
 
-def test_workflow_replenishes_once_when_first_filter_batch_underfills():
-    call_count = {"n": 0}
 
-    def _filter(payload):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            keep_ids = {"mp-mock-003"}
-        else:
-            keep_ids = {"mp-mock-007", "mp-mock-008"}
-        return {
-            "policy_name": "practical_screening",
-            "decisions": [
-                {
-                    "material_id": candidate["material_id"],
-                    "keep": candidate["material_id"] in keep_ids,
-                    "reasons": [] if candidate["material_id"] in keep_ids else ["not good fit"],
-                }
-                for candidate in payload["candidates"]
-            ],
-        }
-
-    wf = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
-        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
-        policy_filter=PolicyFilter(inference_fn=_filter),
-        search_expander=FakeSearchExpander(),
-        enable_policy_filter=True,
-    )
-    req = DiscoveryRequest(
-        research_goal="Find semiconductor materials",
-        constraints=DiscoveryConstraints(top_k=3),
-    )
-
-    out = wf.run(req)
-
-    assert call_count["n"] == 2
-    assert out.status == "success"
-    assert len(out.candidates) <= 3
-
-
-def test_workflow_relaxes_retrieval_limit_when_first_filter_batch_has_zero_passes():
-    class WideRetriever(MPRetriever):
-        def __init__(self):
-            super().__init__(MPRetrieverConfig(use_live_if_available=False))
-            self.limit_overrides: list[int | None] = []
-
-        def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
-            self.limit_overrides.append(payload.limit_override)
-            prefix = "raw" if payload.limit_override is None else "relaxed"
-            candidates = [
-                Candidate(
-                    material_id=f"{prefix}-{index}",
-                    formula="SiC" if prefix == "relaxed" and index == 0 else f"SiC{index}H",
-                    source="mock",
-                    features={
-                        "elements": ["Si", "C"] if prefix == "relaxed" and index == 0 else ["Si", "C", "H"],
-                        "mp_band_gap_ev": 2.5,
-                        "mp_energy_above_hull": 0.01,
-                        "nsites": 8,
-                        "is_metal": False,
-                    },
-                )
-                for index in range(20)
-            ]
-            return MPRetrieverOutput(
-                candidates=candidates,
-                provenance=ToolCallProvenance(
-                    tool_name="wide_retriever",
-                    input_payload=payload.model_dump(mode="json"),
-                    output_summary={"candidate_count": len(candidates)},
-                ),
-            )
-
-    call_count = {"n": 0}
-
-    def _filter(payload):
-        call_count["n"] += 1
-        return {
-            "policy_name": "chemistry_screening",
-            "decisions": [
-                {
-                    "material_id": candidate["material_id"],
-                    "keep": candidate["material_id"] == "relaxed-0",
-                    "reasons": [] if candidate["material_id"] == "relaxed-0" else ["not requested material concept"],
-                }
-                for candidate in payload["candidates"]
-            ],
-        }
-
-    retriever = WideRetriever()
-    wf = DiscoveryWorkflow(
-        retriever=retriever,
-        intent_agent=ChemistryIntentAgent(
-            parser_fn=lambda _goal: ParsedDiscoveryIntent(requested_material_class="semiconductor")
-        ),
-        policy_filter=PolicyFilter(inference_fn=_filter),
-        search_expander=FakeSearchExpander(["SiC", "SiCH"]),
-        enable_policy_filter=True,
-    )
-    req = DiscoveryRequest(
-        research_goal="Find semiconductor materials with silicon and carbon and band gap above 2 eV",
-        constraints=DiscoveryConstraints(required_elements=["Si", "C"], min_band_gap_ev=2.0, top_k=1),
-    )
-
-    out = wf.run(req)
-
-    assert out.status == "success"
-    assert call_count["n"] == 2
-    assert retriever.limit_overrides == [None, 100]
-    assert out.candidates[0].candidate.material_id == "relaxed-0"
-
-
-def test_filter_candidate_selection_prioritizes_exact_required_element_set():
-    wf = DiscoveryWorkflow(enable_policy_filter=False)
-    constraints = DiscoveryConstraints(required_elements=["Si", "C"])
-    candidates = [
-        Candidate(
-            material_id="complex",
-            formula="SiH12C2N4O4",
-            features={"elements": ["Si", "C", "H", "N", "O"], "mp_band_gap_ev": 7.0},
-        ),
-        Candidate(
-            material_id="binary",
-            formula="SiC",
-            features={"elements": ["Si", "C"], "mp_band_gap_ev": 2.4},
-        ),
-    ]
-
-    selected = wf._select_filter_candidates(candidates, limit=2, constraints=constraints)
-
-    assert [candidate.material_id for candidate in selected] == ["binary", "complex"]
 
 
 def test_workflow_fails_closed_when_filter_returns_invalid_json():
     wf = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(inference_fn=lambda _payload: "not-json"),
         search_expander=FakeSearchExpander(),
@@ -656,7 +549,7 @@ def test_workflow_fails_closed_when_filter_returns_invalid_json():
 
 def test_workflow_unknown_stability_does_not_trigger_refine():
     wf = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(
             inference_fn=lambda payload: {
@@ -692,7 +585,7 @@ def test_workflow_unknown_stability_does_not_trigger_refine():
 
 def test_workflow_returns_stability_annotations_in_ranked_candidates():
     wf = DiscoveryWorkflow(
-        retriever=MPRetriever(MPRetrieverConfig(use_live_if_available=False)),
+        retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
         policy_filter=PolicyFilter(
             inference_fn=lambda payload: {
@@ -723,3 +616,103 @@ def test_workflow_returns_stability_annotations_in_ranked_candidates():
     assert by_id["mp-mock-003"].stability.source == "materials_project"
     assert by_id["mp-mock-005"].stability.is_stable is None
     assert by_id["mp-mock-005"].stability.source == "unknown"
+
+
+def _structure_workflow(candidates):
+    class Retriever(MPRetriever):
+        def retrieve(self, payload):
+            return MPRetrieverOutput(
+                candidates=[candidate.model_copy(deep=True) for candidate in candidates],
+                provenance=ToolCallProvenance(
+                    tool_name="test_retriever", input_payload={},
+                    output_summary={"source": "materials_project"},
+                ),
+                reason_code="no_matches" if not candidates else None,
+            )
+
+    return DiscoveryWorkflow(
+        retriever=Retriever(),
+        intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),
+        search_expander=FakeSearchExpander(["AlN", "GaN"]),
+        enable_policy_filter=False,
+    )
+
+
+def test_top_k_counts_formulas_and_keeps_all_passing_structures():
+    candidates = [
+        Candidate(material_id="mp-1", formula="AlN", source="materials_project", features={"mp_band_gap_ev": 4.0, "mp_energy_above_hull": 0.01}),
+        Candidate(material_id="mp-2", formula="AlN", source="materials_project", features={"mp_band_gap_ev": 3.5, "mp_energy_above_hull": 0.02}),
+        Candidate(material_id="mp-3", formula="GaN", source="materials_project", features={"mp_band_gap_ev": 2.0, "mp_energy_above_hull": 0.01}),
+    ]
+    result = _structure_workflow(candidates).run(DiscoveryRequest(
+        research_goal="Find semiconductors with band gap above 1 eV",
+        constraints=DiscoveryConstraints(top_k=1, min_band_gap_ev=1.0),
+    ))
+    assert [item.candidate.material_id for item in result.candidates] == ["mp-1", "mp-2"]
+    assert all(item.candidate.entry_count == 2 for item in result.candidates)
+
+
+def test_compact_api_exposes_each_structure_and_data_source(monkeypatch):
+    candidates = [
+        Candidate(material_id="mp-1", formula="AlN", source="materials_project", features={"mp_band_gap_ev": 4.0, "mp_energy_above_hull": 0.01}),
+        Candidate(material_id="mp-2", formula="AlN", source="materials_project", features={"mp_band_gap_ev": 3.5, "mp_energy_above_hull": 0.02}),
+    ]
+    monkeypatch.setattr(api_main, "workflow_factory", lambda: _structure_workflow(candidates))
+    response = client.post("/discover", json={"research_goal": "Find semiconductor materials", "constraints": {"top_k": 1}})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data_source"] == "materials_project"
+    assert [item["material_id"] for item in body["candidates"]] == ["mp-1", "mp-2"]
+
+
+def test_formula_ranking_uses_requested_mp_property():
+    candidates = [
+        Candidate(material_id="mp-1", formula="Al2O3", source="materials_project", features={"density": 5.2, "mp_energy_above_hull": 0.01}),
+        Candidate(material_id="mp-2", formula="Ga2O3", source="materials_project", features={"density": 6.4, "mp_energy_above_hull": 0.01}),
+    ]
+    result = _structure_workflow(candidates).run(DiscoveryRequest(
+        research_goal="Find dense oxide materials",
+        constraints=DiscoveryConstraints(top_k=1, mp_filters=MPFilters(density=FloatRange(min=5.0))),
+    ))
+    assert [item.candidate.formula for item in result.candidates] == ["Ga2O3"]
+
+
+def test_empty_mp_search_is_success_with_reason():
+    result = _structure_workflow([]).run(DiscoveryRequest(
+        research_goal="Find semiconductor materials", constraints=DiscoveryConstraints(top_k=1),
+    ))
+    assert result.status == "success"
+    assert result.reason_code == "no_matches"
+    assert result.candidates == []
+
+
+def test_final_constraint_rejection_has_distinct_reason():
+    candidate = Candidate(material_id="mp-1", formula="AlN", source="materials_project", features={"mp_band_gap_ev": None})
+    result = _structure_workflow([candidate]).run(DiscoveryRequest(
+        research_goal="Find semiconductors with band gap above 2 eV",
+        constraints=DiscoveryConstraints(top_k=1, min_band_gap_ev=2.0),
+    ))
+    assert result.status == "success"
+    assert result.reason_code == "final_constraint_no_pass"
+    assert result.candidates == []
+
+
+def test_matgl_partial_failure_preserves_structures_and_mp_data(monkeypatch):
+    from matsci_agent.tools import property_predictor
+
+    candidates = [
+        Candidate(material_id="mp-1", formula="AlN", source="materials_project", features={"mp_band_gap_ev": 2.5, "mp_energy_above_hull": 0.01, "nsites": 8}),
+        Candidate(material_id="mp-2", formula="AlN", source="materials_project", features={"mp_band_gap_ev": 2.4, "mp_energy_above_hull": 0.02, "nsites": 8}),
+    ]
+    values = iter([(1.5, None), (None, "model failed")])
+    monkeypatch.setattr(property_predictor, "_calculate_matgl", lambda *_args, **_kwargs: next(values))
+    result = _structure_workflow(candidates).run(DiscoveryRequest(
+        research_goal="Find semiconductors with MatGL band gap calculation",
+        constraints=DiscoveryConstraints(top_k=1, calculate_matgl=True, min_band_gap_ev=2.0),
+    ))
+    assert result.status == "partial"
+    assert result.reason_code == "matgl_calculation_failed"
+    assert [item.candidate.material_id for item in result.candidates] == ["mp-1", "mp-2"]
+    assert result.candidates[0].candidate.features["gap_difference_ev"] == -1.0
+    assert result.candidates[1].predicted_properties.band_gap_ev is None
+    assert result.candidates[1].candidate.features["mp_band_gap_ev"] == 2.4

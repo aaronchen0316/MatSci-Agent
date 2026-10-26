@@ -3,7 +3,7 @@ from matsci_agent.guardrails.capability import CapabilityGuardrail
 from matsci_agent.schemas import DiscoveryConstraints, ParsedDiscoveryIntent
 
 
-def test_planner_builds_band_gap_screening_plan_with_selective_recalc():
+def test_planner_builds_band_gap_screening_plan_with_matgl():
     agent = ChemistryIntentAgent(
         parser_fn=lambda _goal: ParsedDiscoveryIntent(
             requested_material_class="semiconductor",
@@ -26,10 +26,9 @@ def test_planner_builds_band_gap_screening_plan_with_selective_recalc():
     assert plan.parsed_constraints.banned_elements == ["Si"]
     assert plan.parsed_constraints.min_band_gap_ev == 2.0
     assert plan.execution_policy.calculate_matgl is True
-    assert plan.execution_policy.recalculate_top_n == 1
 
 
-def test_planner_extracts_selective_recalc_when_prompt_uses_the_top_n_phrase():
+def test_planner_preserves_explicit_matgl_request():
     agent = ChemistryIntentAgent(
         parser_fn=lambda _goal: ParsedDiscoveryIntent(
             requested_material_class="semiconductor",
@@ -47,7 +46,6 @@ def test_planner_extracts_selective_recalc_when_prompt_uses_the_top_n_phrase():
     assert plan.source_universe == "materials_project_entries"
     assert plan.requested_material_class == "semiconductor"
     assert plan.execution_policy.calculate_matgl is True
-    assert plan.execution_policy.recalculate_top_n == 2
 
 
 def test_guardrail_refuses_diffusivity_task():

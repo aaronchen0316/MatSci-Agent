@@ -134,7 +134,6 @@ def test_operator_command_renders_all_sections(monkeypatch):
                     ),
                     predicted_properties=PredictedProperties(
                         band_gap_ev=5.1,
-                        uncertainty=0.2,
                         backend="matgl_band_gap:test",
                     ),
                     stability=StabilityResult(
@@ -214,7 +213,6 @@ def test_render_operator_ranked_candidates_show_split_gap_columns():
                     ),
                     predicted_properties=PredictedProperties(
                         band_gap_ev=5.1,
-                        uncertainty=0.2,
                         backend="matgl_band_gap:test",
                     ),
                     stability=StabilityResult(
@@ -262,15 +260,15 @@ def test_doctor_renders_status_rows(monkeypatch):
     assert "WARN" in result.stdout
 
 
-def test_scenarios_list_shows_built_ins():
-    result = runner.invoke(app, ["scenarios", "list"])
+def test_examples_list_shows_built_ins():
+    result = runner.invoke(app, ["examples", "list"])
 
     assert result.exit_code == 0
     for name in ["basic_success", "policy_filter", "unsupported_request", "matgl_recalc"]:
         assert name in result.stdout
 
 
-def test_scenarios_run_unsupported_request_shows_structured_refusal(monkeypatch):
+def test_examples_run_unsupported_request_shows_structured_refusal(monkeypatch):
     monkeypatch.setattr(
         transport,
         "run_summary",
@@ -282,7 +280,7 @@ def test_scenarios_run_unsupported_request_shows_structured_refusal(monkeypatch)
         ),
     )
 
-    result = runner.invoke(app, ["scenarios", "run", "unsupported_request"])
+    result = runner.invoke(app, ["examples", "run", "unsupported_request"])
 
     assert result.exit_code == 0
     assert "Unsupported" in result.stdout

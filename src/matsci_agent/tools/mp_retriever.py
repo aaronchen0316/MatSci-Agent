@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,8 +25,15 @@ _INT_RANGE_DEFAULTS: dict[str, tuple[int, int]] = {
 @dataclass
 class MPRetrieverConfig:
     api_key_env_var: str = "MP_API_KEY"
-    use_live_if_available: bool = True
     request_limit_multiplier: int = 4
+    max_documents: int = 120
+    max_searches: int = 3
+
+
+class MPRetrieverError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class MPRetriever:
@@ -36,41 +42,64 @@ class MPRetriever:
     def __init__(self, config: MPRetrieverConfig | None = None) -> None:
         self.config = config or MPRetrieverConfig()
 
+    @staticmethod
+    def passes_constraints(candidate: Candidate, constraints) -> bool:
+        effective = MPRetriever._effective_filters(constraints, "")
+        features = candidate.features
+        elements = features.get("elements")
+        element_set = {str(value).lower() for value in elements} if isinstance(elements, list) and elements else MPRetriever._extract_elements(candidate.formula)
+        return MPRetriever._passes_client_side_filters(
+            effective=effective,
+            elements=element_set,
+            mp_band_gap_ev=features.get("mp_band_gap_ev"),
+            mp_energy_above_hull=features.get("mp_energy_above_hull"),
+            nsites=features.get("nsites"),
+            is_metal=features.get("is_metal"),
+            is_stable=features.get("is_stable"),
+            is_gap_direct=features.get("is_gap_direct"),
+            theoretical=features.get("theoretical"),
+            deprecated=features.get("deprecated"),
+            has_reconstructed=features.get("has_reconstructed"),
+            generic_properties=features,
+        )
+
     def retrieve(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
-        live: MPRetrieverOutput | None = None
-        if self.config.use_live_if_available:
-            live = self._retrieve_from_mp(payload)
-            if live is not None and live.candidates:
-                return live
+        return self._retrieve_from_mp(payload)
 
-        source = "mock_fallback_no_live_results" if live is not None else "mock_fallback"
-        return self._retrieve_from_mock(payload, source=source)
-
-    def _retrieve_from_mp(self, payload: MPRetrieverInput) -> MPRetrieverOutput | None:
+    def _retrieve_from_mp(self, payload: MPRetrieverInput) -> MPRetrieverOutput:
         api_key = os.getenv(self.config.api_key_env_var)
         if not api_key:
-            return None
+            raise MPRetrieverError("mp_credentials_missing", f"Missing {self.config.api_key_env_var}.")
 
         try:
             from mp_api.client import MPRester
-        except Exception:
-            return None
+        except Exception as exc:
+            raise MPRetrieverError("mp_dependency_missing", "Materials Project client is unavailable.") from exc
 
         limit = payload.limit_override or (payload.constraints.top_k * self.config.request_limit_multiplier)
         excluded_ids = set(payload.exclude_material_ids)
         effective = self._effective_filters(payload.constraints, payload.research_goal)
         search_summaries: list[dict[str, Any]] = []
+        raw_count = 0
+        seen_docs: set[str] = set()
 
         def _search(search_kwargs: dict[str, Any]) -> list[Candidate]:
-            try:
-                with MPRester(api_key) as mpr:
-                    docs = mpr.materials.summary.search(**search_kwargs)
-            except Exception:
-                raise
+            nonlocal raw_count
+            remaining = self.config.max_documents - len(seen_docs)
+            if remaining <= 0 or len(search_summaries) >= self.config.max_searches:
+                return []
+            search_kwargs["num_chunks"] = 1
+            search_kwargs["chunk_size"] = min(search_kwargs["chunk_size"], remaining)
+            with MPRester(api_key) as mpr:
+                docs = mpr.materials.summary.search(**search_kwargs)
             search_summaries.append(self._json_safe_search_kwargs(search_kwargs))
             candidates: list[Candidate] = []
-            for doc in docs:
+            for doc in docs[:search_kwargs["chunk_size"]]:
                 material_id = str(doc.material_id)
+                if material_id in seen_docs:
+                    continue
+                seen_docs.add(material_id)
+                raw_count += 1
                 if material_id in excluded_ids:
                     continue
                 formula = str(doc.formula_pretty)
@@ -93,16 +122,12 @@ class MPRetriever:
                     mp_energy_above_hull=mp_energy_above_hull,
                     nsites=nsites,
                     is_metal=getattr(doc, "is_metal", None),
+                    is_stable=getattr(doc, "is_stable", None),
+                    is_gap_direct=getattr(doc, "is_gap_direct", None),
                     theoretical=getattr(doc, "theoretical", None),
                     deprecated=getattr(doc, "deprecated", None),
+                    has_reconstructed=getattr(doc, "has_reconstructed", None),
                     generic_properties=generic_properties,
-                ):
-                    continue
-                if not self._passes_goal_semantics(
-                    goal=payload.research_goal,
-                    element_set=elements,
-                    mp_band_gap_ev=mp_band_gap_ev,
-                    min_band_gap_ev=payload.constraints.min_band_gap_ev,
                 ):
                     continue
                 symmetry = getattr(doc, "symmetry", None)
@@ -123,8 +148,11 @@ class MPRetriever:
                                 else None
                             ),
                             "is_metal": getattr(doc, "is_metal", None),
+                            "is_stable": getattr(doc, "is_stable", None),
+                            "is_gap_direct": getattr(doc, "is_gap_direct", None),
                             "theoretical": getattr(doc, "theoretical", None),
                             "deprecated": getattr(doc, "deprecated", None),
+                            "has_reconstructed": getattr(doc, "has_reconstructed", None),
                             "crystal_system": (
                                 str(getattr(symmetry, "crystal_system", "")).lower()
                                 if symmetry is not None and getattr(symmetry, "crystal_system", None) is not None
@@ -146,12 +174,15 @@ class MPRetriever:
             return candidates
 
         try:
-            if payload.search_space_targets:
+            if effective.material_ids is not None:
+                id_kwargs = self._build_search_kwargs(payload, limit=limit)
+                candidates = _search(id_kwargs)
+            elif payload.search_space_targets:
                 formula_kwargs = self._build_search_kwargs(payload, limit=limit)
-                formula_kwargs["formula"] = [target.normalized_formula for target in payload.search_space_targets]
+                formula_kwargs["formula"] = effective.formula or [target.normalized_formula for target in payload.search_space_targets]
                 candidates = _search(formula_kwargs)
-                if len(self._dedupe_by_formula(list(candidates), limit=limit)) < payload.constraints.top_k:
-                    chemsys_values = sorted({target.chemsys for target in payload.search_space_targets if target.chemsys})
+                if effective.formula is None and len({candidate.formula for candidate in candidates}) < payload.constraints.top_k:
+                    chemsys_values = effective.chemsys or sorted({target.chemsys for target in payload.search_space_targets if target.chemsys})
                     if chemsys_values:
                         chemsys_kwargs = self._build_search_kwargs(payload, limit=limit)
                         chemsys_kwargs.pop("formula", None)
@@ -161,19 +192,29 @@ class MPRetriever:
                             if candidate.material_id not in seen:
                                 candidates.append(candidate)
                                 seen.add(candidate.material_id)
+                        extra_formulas = sorted({candidate.formula for candidate in candidates})
+                        if extra_formulas:
+                            complete_kwargs = self._build_search_kwargs(payload, limit=limit)
+                            complete_kwargs.pop("chemsys", None)
+                            complete_kwargs["formula"] = extra_formulas
+                            for candidate in _search(complete_kwargs):
+                                if candidate.material_id not in seen:
+                                    candidates.append(candidate)
+                                    seen.add(candidate.material_id)
             else:
                 search_kwargs = self._build_search_kwargs(payload, limit=limit)
                 candidates = _search(search_kwargs)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise MPRetrieverError("mp_service_failed", "Materials Project query failed.") from exc
 
         candidates.sort(key=lambda candidate: self._candidate_rank_key(candidate, payload.research_goal))
-        deduped = self._dedupe_by_formula(candidates, limit=limit)
+        reason_code = None if candidates else "constraint_no_pass" if raw_count else "no_matches"
         provenance = ToolCallProvenance(
             tool_name="mp_retriever",
             input_payload=payload.model_dump(mode="json"),
             output_summary={
-                "candidate_count": len(deduped),
+                "candidate_count": len(candidates),
+                "raw_document_count": raw_count,
                 "source": "materials_project",
                 "fallback_used": False,
                 "search_kwargs": search_summaries[0] if search_summaries else {},
@@ -181,123 +222,7 @@ class MPRetriever:
                 "search_space_target_count": len(payload.search_space_targets),
             },
         )
-        return MPRetrieverOutput(candidates=deduped, provenance=provenance)
-
-    def _retrieve_from_mock(self, payload: MPRetrieverInput, source: str) -> MPRetrieverOutput:
-        mock_pool = [
-            Candidate(
-                material_id="mp-mock-001",
-                formula="Al3Mg2",
-                source="mock",
-                features={"mp_band_gap_ev": 0.1, "mp_energy_above_hull": 0.12, "nsites": 20, "is_metal": True},
-            ),
-            Candidate(
-                material_id="mp-mock-002",
-                formula="CuZn",
-                source="mock",
-                features={"mp_band_gap_ev": 0.0, "mp_energy_above_hull": 0.06, "nsites": 2, "is_metal": True},
-            ),
-            Candidate(
-                material_id="mp-mock-003",
-                formula="AlN",
-                source="mock",
-                features={"mp_band_gap_ev": 5.9, "mp_energy_above_hull": 0.01, "nsites": 8, "is_metal": False},
-            ),
-            Candidate(
-                material_id="mp-mock-010",
-                formula="AlN",
-                source="mock",
-                features={"mp_band_gap_ev": 5.1, "mp_energy_above_hull": 0.02, "nsites": 8, "is_metal": False},
-            ),
-            Candidate(
-                material_id="mp-mock-004",
-                formula="SiC",
-                source="mock",
-                features={"mp_band_gap_ev": 2.4, "mp_energy_above_hull": 0.02, "nsites": 8, "is_metal": False},
-            ),
-            Candidate(
-                material_id="mp-mock-005",
-                formula="Fe2VAl",
-                source="mock",
-                features={"mp_band_gap_ev": None, "mp_energy_above_hull": None, "nsites": 12, "is_metal": None},
-            ),
-            Candidate(
-                material_id="mp-mock-006",
-                formula="Ni3Al",
-                source="mock",
-                features={"mp_band_gap_ev": None, "mp_energy_above_hull": None, "nsites": 54, "is_metal": None},
-            ),
-            Candidate(
-                material_id="mp-mock-007",
-                formula="CoTi",
-                source="mock",
-                features={"mp_band_gap_ev": 1.0, "mp_energy_above_hull": 0.03, "nsites": 4, "is_metal": False},
-            ),
-            Candidate(
-                material_id="mp-mock-008",
-                formula="O2",
-                source="mock",
-                features={"mp_band_gap_ev": 1.3, "mp_energy_above_hull": 0.00, "nsites": 2, "is_metal": False},
-            ),
-            Candidate(
-                material_id="mp-mock-009",
-                formula="AcF3",
-                source="mock",
-                features={"mp_band_gap_ev": 6.2, "mp_energy_above_hull": 0.02, "nsites": 16, "is_metal": False},
-            ),
-        ]
-
-        excluded_ids = set(payload.exclude_material_ids)
-        limit = payload.limit_override or (payload.constraints.top_k * self.config.request_limit_multiplier)
-        effective = self._effective_filters(payload.constraints, payload.research_goal)
-        target_formulas = {target.normalized_formula for target in payload.search_space_targets}
-        target_chemsys = {target.chemsys for target in payload.search_space_targets}
-        filtered = []
-        for candidate in mock_pool:
-            if candidate.material_id in excluded_ids:
-                continue
-            elements = self._extract_elements(candidate.formula)
-            if target_formulas or target_chemsys:
-                chemsys = "-".join(sorted(element.capitalize() for element in elements))
-                if candidate.formula not in target_formulas and chemsys not in target_chemsys:
-                    continue
-            if effective.elements and not set(token.lower() for token in effective.elements).issubset(elements):
-                continue
-            if set(token.lower() for token in effective.exclude_elements) & elements:
-                continue
-            if effective.band_gap is not None and candidate.features.get("mp_band_gap_ev") is not None:
-                band_gap = float(candidate.features["mp_band_gap_ev"])
-                if effective.band_gap.min is not None and band_gap < effective.band_gap.min:
-                    continue
-                if effective.band_gap.max is not None and band_gap > effective.band_gap.max:
-                    continue
-            if not self._passes_goal_semantics(
-                goal=payload.research_goal,
-                element_set=elements,
-                mp_band_gap_ev=candidate.features.get("mp_band_gap_ev"),
-                min_band_gap_ev=payload.constraints.min_band_gap_ev,
-            ):
-                continue
-            filtered.append(candidate.model_copy(deep=True))
-
-        filtered.sort(key=lambda candidate: self._candidate_rank_key(candidate, payload.research_goal))
-        deduped = self._dedupe_by_formula(filtered, limit=limit)
-        provenance = ToolCallProvenance(
-            tool_name="mp_retriever",
-            input_payload=payload.model_dump(mode="json"),
-            output_summary={
-                "candidate_count": len(deduped),
-                "source": source,
-                "fallback_used": True,
-                "fallback_reason": (
-                    "live_mp_returned_zero_candidates_after_server_and_client_filters"
-                    if source == "mock_fallback_no_live_results"
-                    else f"missing {self.config.api_key_env_var}, missing mp-api, or MP request error"
-                ),
-                "search_space_target_count": len(payload.search_space_targets),
-            },
-        )
-        return MPRetrieverOutput(candidates=deduped, provenance=provenance)
+        return MPRetrieverOutput(candidates=candidates, provenance=provenance, reason_code=reason_code)
 
     def _build_search_kwargs(self, payload: MPRetrieverInput, limit: int) -> dict[str, Any]:
         effective = self._effective_filters(payload.constraints, payload.research_goal)
@@ -316,12 +241,15 @@ class MPRetriever:
                 "nsites",
                 "structure",
                 "is_metal",
+                "is_stable",
+                "is_gap_direct",
                 "deprecated",
                 "theoretical",
                 "symmetry",
+                "has_reconstructed",
             ],
             "num_chunks": 1,
-            "chunk_size": max(120, limit * 12),
+            "chunk_size": min(self.config.max_documents, max(20, limit)),
         }
 
         if effective.formula is not None:
@@ -358,7 +286,8 @@ class MPRetriever:
                 search_kwargs[field_name] = self._int_range_to_tuple(field_name, value)
         return search_kwargs
 
-    def _effective_filters(self, constraints, goal: str) -> MPFilters:
+    @staticmethod
+    def _effective_filters(constraints, goal: str) -> MPFilters:
         filters = constraints.mp_filters.model_copy(deep=True)
         filters.elements = sorted(set(filters.elements) | set(constraints.required_elements))
         filters.exclude_elements = sorted(set(filters.exclude_elements) | set(constraints.banned_elements))
@@ -382,8 +311,11 @@ class MPRetriever:
         mp_energy_above_hull: float | None,
         nsites: int | None,
         is_metal: bool | None,
+        is_stable: bool | None = None,
+        is_gap_direct: bool | None = None,
         theoretical: bool | None,
         deprecated: bool | None,
+        has_reconstructed: bool | None = None,
         generic_properties: dict[str, Any] | None = None,
     ) -> bool:
         required_elements = {token.lower() for token in effective.elements}
@@ -392,18 +324,28 @@ class MPRetriever:
             return False
         if excluded_elements & elements:
             return False
-        if effective.is_metal is not None and is_metal is not None and is_metal != effective.is_metal:
+        if effective.is_metal is not None and is_metal != effective.is_metal:
             return False
-        if effective.theoretical is not None and theoretical is not None and theoretical != effective.theoretical:
+        if effective.is_stable is not None and is_stable != effective.is_stable:
             return False
-        if effective.deprecated is not None and deprecated is not None and deprecated != effective.deprecated:
+        if effective.is_gap_direct is not None and is_gap_direct != effective.is_gap_direct:
             return False
-        if effective.band_gap is not None and mp_band_gap_ev is not None:
+        if effective.theoretical is not None and theoretical != effective.theoretical:
+            return False
+        if effective.deprecated is not None and deprecated != effective.deprecated:
+            return False
+        if effective.has_reconstructed is not None and has_reconstructed != effective.has_reconstructed:
+            return False
+        if effective.band_gap is not None:
+            if mp_band_gap_ev is None:
+                return False
             if effective.band_gap.min is not None and float(mp_band_gap_ev) < effective.band_gap.min:
                 return False
             if effective.band_gap.max is not None and float(mp_band_gap_ev) > effective.band_gap.max:
                 return False
-        if effective.energy_above_hull is not None and mp_energy_above_hull is not None:
+        if effective.energy_above_hull is not None:
+            if mp_energy_above_hull is None:
+                return False
             if effective.energy_above_hull.min is not None and float(mp_energy_above_hull) < effective.energy_above_hull.min:
                 return False
             if effective.energy_above_hull.max is not None and float(mp_energy_above_hull) > effective.energy_above_hull.max:
@@ -411,13 +353,17 @@ class MPRetriever:
         for field_name in ["formation_energy", "density", "efermi", "total_magnetization", "volume"]:
             range_filter = getattr(effective, field_name)
             value = (generic_properties or {}).get(field_name)
-            if range_filter is None or value is None:
+            if range_filter is None:
                 continue
+            if value is None:
+                return False
             if range_filter.min is not None and float(value) < range_filter.min:
                 return False
             if range_filter.max is not None and float(value) > range_filter.max:
                 return False
-        if effective.num_sites is not None and nsites is not None:
+        if effective.num_sites is not None:
+            if nsites is None:
+                return False
             if effective.num_sites.min is not None and int(nsites) < effective.num_sites.min:
                 return False
             if effective.num_sites.max is not None and int(nsites) > effective.num_sites.max:
@@ -461,24 +407,6 @@ class MPRetriever:
         band_gap = candidate.features.get("mp_band_gap_ev")
         return (-(float(band_gap) if band_gap is not None else -1.0), candidate.material_id)
 
-    def _dedupe_by_formula(self, candidates: list[Candidate], limit: int) -> list[Candidate]:
-        counts = Counter(candidate.formula for candidate in candidates)
-        seen_formulas: set[str] = set()
-        deduped: list[Candidate] = []
-        for candidate in candidates:
-            if candidate.formula in seen_formulas:
-                continue
-            seen_formulas.add(candidate.formula)
-            entry_count = counts[candidate.formula]
-            candidate.entry_count = entry_count
-            candidate.has_multiple_entries = entry_count > 1
-            candidate.features["has_multiple_entries"] = candidate.has_multiple_entries
-            candidate.features["entry_count"] = candidate.entry_count
-            deduped.append(candidate)
-            if len(deduped) >= limit:
-                break
-        return deduped
-
     @staticmethod
     def _json_safe_search_kwargs(search_kwargs: dict[str, Any]) -> dict[str, Any]:
         safe: dict[str, Any] = {}
@@ -496,14 +424,3 @@ class MPRetriever:
     @staticmethod
     def _extract_elements(formula: str) -> set[str]:
         return {token.lower() for token in re.findall(r"[A-Z][a-z]?", formula)}
-
-    @staticmethod
-    def _passes_goal_semantics(
-        goal: str,
-        element_set: set[str],
-        mp_band_gap_ev: float | None,
-        min_band_gap_ev: float | None,
-    ) -> bool:
-        if min_band_gap_ev is not None and mp_band_gap_ev is not None and float(mp_band_gap_ev) < min_band_gap_ev:
-            return False
-        return True

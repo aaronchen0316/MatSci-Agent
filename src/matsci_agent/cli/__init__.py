@@ -1,1 +1,1 @@
-"""CLI surfaces for demo, operator, doctor, and scenarios."""
+"""CLI surfaces for demo, operator, doctor, and examples."""

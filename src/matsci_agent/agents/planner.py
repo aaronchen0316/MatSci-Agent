@@ -44,12 +44,8 @@ class ChemistryIntentAgent:
             explicit_base_fields=explicit_base_fields,
         )
         task_class = self._infer_task_class(research_goal, resolved)
-        recalculate_top_n = self._extract_recalculate_top_n(research_goal)
         execution_policy = ExecutionPolicy(
             calculate_matgl=resolved.calculate_matgl,
-            recalculate_top_n=(
-                recalculate_top_n if resolved.calculate_matgl else None
-            ),
             matgl_max_recalc_entries=settings.matgl_max_recalc_entries,
             matgl_max_atoms=settings.matgl_max_atoms,
             enable_relaxation=settings.matgl_enable_relaxation,
@@ -143,20 +139,3 @@ class ChemistryIntentAgent:
         if "band gap" in text or constraints.min_band_gap_ev is not None:
             return "band_gap_desc"
         return "default"
-
-    @staticmethod
-    def _extract_recalculate_top_n(goal: str) -> int | None:
-        text = goal.lower()
-        patterns = [
-            r"\bredo\s+calculation\s+of\s+top\s+(\d{1,3})\b",
-            r"\brecalculate\s+(?:the\s+)?top\s+(\d{1,3})\b",
-            r"\brecalculate\s+top\s+(\d{1,3})\b",
-            r"\brecompute\s+top\s+(\d{1,3})\b",
-            r"\btop\s+(\d{1,3})\s+candidates?\s+.*\brecalculate\b",
-            r"\btop\s+(\d{1,3})\s+candidates?\s+.*\bredo\b",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                return max(1, min(100, int(match.group(1))))
-        return None

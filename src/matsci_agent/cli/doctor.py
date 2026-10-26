@@ -25,11 +25,11 @@ def run_doctor_checks(api_url: str | None = None) -> list[DoctorCheck]:
         _check_package("typer", "Typer CLI"),
         _check_package("rich", "Rich renderer"),
         _check_package("mlflow", "MLflow"),
-        _check_package("mp_api", "mp-api", optional=True),
+        _check_package("mp_api", "mp-api"),
         _check_package("matgl", "MatGL", optional=True),
         _check_package("torch", "PyTorch", optional=True),
         _check_package("dgl", "DGL", optional=True),
-        _check_env("MP_API_KEY", "Materials Project live retrieval", optional=True),
+        _check_env("MP_API_KEY", "Materials Project live retrieval"),
         _check_env(resolve_llm_api_key_env(), "OpenRouter parsing / policy filter", optional=False),
         _check_path(
             Path(os.getenv("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi")),
