@@ -12,7 +12,7 @@ from matsci_agent.schemas import (
     ToolCallProvenance,
 )
 
-_DEFAULT_MODEL = "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"
+_DEFAULT_MODEL = "models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1"
 _MODEL: Any | None = None
 _MODEL_ERROR: str | None = None
 
@@ -31,8 +31,6 @@ def _load_model() -> tuple[Any | None, str | None]:
         import matgl
 
         model_name = os.getenv("MATSCI_MATGL_MODEL", _DEFAULT_MODEL)
-        if model_name.split("/")[-1].startswith("MEGNet-"):
-            matgl.set_backend("DGL")
         _MODEL = matgl.load_model(model_name)
     except Exception as exc:
         _MODEL_ERROR = f"MatGL model unavailable: {exc}"
@@ -82,13 +80,19 @@ def _calculate_matgl(features: dict[str, Any], *, relax: bool, max_steps: int) -
     try:
         if relax:
             import matgl
-            from matgl.ext._ase_pyg import Relaxer
+            from matgl.ext.ase import Relaxer
 
             relax_name = os.getenv("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2")
             result = Relaxer(potential=matgl.load_model(relax_name)).relax(structure, steps=max_steps)
             structure = result["final_structure"]
         if hasattr(model, "predict_structure"):
-            output = model.predict_structure(structure)
+            if getattr(getattr(model, "embedding", None), "layer_state_embedding", None) is not None:
+                import torch
+
+                # The bundled multifidelity MEGNet uses state 0 for the MP PBE gap.
+                output = model.predict_structure(structure, state_attr=torch.tensor([0], dtype=torch.long))
+            else:
+                output = model.predict_structure(structure)
         elif hasattr(model, "predict"):
             output = model.predict(structure)
         else:

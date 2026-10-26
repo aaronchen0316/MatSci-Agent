@@ -72,6 +72,17 @@ def test_invalid_matgl_output_is_failure_not_1_2_ev(monkeypatch):
     assert "no valid band gap" in error
 
 
+def test_band_gap_model_load_does_not_switch_graph_backend(monkeypatch):
+    matgl = ModuleType("matgl")
+    matgl.load_model = lambda _name: "pyg model"
+    matgl.set_backend = lambda _name: pytest.fail("Backend switch is unsupported")
+    monkeypatch.setitem(sys.modules, "matgl", matgl)
+    monkeypatch.setattr(module, "_MODEL", None)
+    monkeypatch.setattr(module, "_MODEL_ERROR", None)
+
+    assert module._load_model() == ("pyg model", None)
+
+
 def test_relaxation_uses_pyg_relaxer_with_pyg_potential(monkeypatch):
     class Model:
         def predict_structure(self, structure):
@@ -91,11 +102,11 @@ def test_relaxation_uses_pyg_relaxer_with_pyg_potential(monkeypatch):
     matgl.load_model = lambda _name: "pyg potential"
     matgl_ext = ModuleType("matgl.ext")
     matgl_ext.__path__ = []
-    pyg_ase = ModuleType("matgl.ext._ase_pyg")
+    pyg_ase = ModuleType("matgl.ext.ase")
     pyg_ase.Relaxer = Relaxer
     monkeypatch.setitem(sys.modules, "matgl", matgl)
     monkeypatch.setitem(sys.modules, "matgl.ext", matgl_ext)
-    monkeypatch.setitem(sys.modules, "matgl.ext._ase_pyg", pyg_ase)
+    monkeypatch.setitem(sys.modules, "matgl.ext.ase", pyg_ase)
     monkeypatch.setattr(module, "_structure", lambda _features: "original")
     monkeypatch.setattr(module, "_load_model", lambda: (Model(), None))
 

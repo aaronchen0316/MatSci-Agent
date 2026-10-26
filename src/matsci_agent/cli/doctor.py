@@ -28,11 +28,11 @@ def run_doctor_checks(api_url: str | None = None) -> list[DoctorCheck]:
         _check_package("mp_api", "mp-api"),
         _check_package("matgl", "MatGL", optional=True),
         _check_package("torch", "PyTorch", optional=True),
-        _check_package("dgl", "DGL", optional=True),
+        _check_package("torch_geometric", "PyG", optional=True),
         _check_env("MP_API_KEY", "Materials Project live retrieval"),
         _check_env(resolve_llm_api_key_env(), "OpenRouter parsing / policy filter", optional=False),
         _check_path(
-            Path(os.getenv("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi")),
+            Path(os.getenv("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1")),
             "MatGL band-gap model path",
             optional=True,
         ),
@@ -56,7 +56,7 @@ def _check_python_version() -> DoctorCheck:
     if (version.major, version.minor) == (3, 12):
         return DoctorCheck("PASS", "Python runtime", f"{version.major}.{version.minor} supported.")
     if version.major == 3 and version.minor in {11, 12}:
-        return DoctorCheck("WARN", "Python runtime", f"{version.major}.{version.minor} supported, 3.12 preferred for DGL-backed MatGL path.")
+        return DoctorCheck("PASS", "Python runtime", f"{version.major}.{version.minor} supported.")
     return DoctorCheck("FAIL", "Python runtime", f"{version.major}.{version.minor} outside supported range >=3.11,<3.13.")
 
 

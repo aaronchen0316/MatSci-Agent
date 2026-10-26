@@ -83,10 +83,10 @@ def test_readiness_checks_optional_matgl_runtime(monkeypatch):
     monkeypatch.setenv("MATSCI_REQUIRE_API_TOKEN", "1")
     monkeypatch.setenv("MATSCI_ENABLE_MATGL", "1")
     monkeypatch.setattr(api_main.importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(api_main, "_matgl_missing", lambda: ["dgl", "MATSCI_MATGL_MODEL"])
+    monkeypatch.setattr(api_main, "_matgl_missing", lambda: ["torch_geometric", "MATSCI_MATGL_MODEL"])
     response = client.get("/ready")
     assert response.status_code == 503
-    assert response.json()["missing"] == ["dgl", "MATSCI_MATGL_MODEL"]
+    assert response.json()["missing"] == ["torch_geometric", "MATSCI_MATGL_MODEL"]
     assert response.headers["X-Request-ID"]
 
 
@@ -95,16 +95,16 @@ def test_matgl_import_check_catches_broken_installed_dependency(monkeypatch):
 
     def import_module(name):
         imports.append(name)
-        if name == "dgl":
+        if name == "torch_geometric":
             raise OSError("native library unavailable")
         return object()
 
     monkeypatch.setattr(api_main.importlib, "import_module", import_module)
     api_main._matgl_import_failures.cache_clear()
     try:
-        assert api_main._matgl_import_failures() == ("dgl",)
-        assert api_main._matgl_import_failures() == ("dgl",)
-        assert imports.count("dgl") == 1
+        assert api_main._matgl_import_failures() == ("torch_geometric",)
+        assert api_main._matgl_import_failures() == ("torch_geometric",)
+        assert imports.count("torch_geometric") == 1
     finally:
         api_main._matgl_import_failures.cache_clear()
 

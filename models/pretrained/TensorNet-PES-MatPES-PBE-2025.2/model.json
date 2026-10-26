@@ -1,14 +1,14 @@
 {
     "@class": "Potential",
-    "@module": "matgl.apps._pes_pyg",
+    "@module": "matgl.apps.pes",
     "@model_version": 3,
     "metadata": {
-        "dataset": "MatPES-r2SCAN-2025.2"
+        "dataset": "MatPES-PBE-2025.2"
     },
     "kwargs": {
         "model": {
             "@class": "TensorNet",
-            "@module": "matgl.models._tensornet_pyg",
+            "@module": "matgl.models",
             "@model_version": 2,
             "init_args": {
                 "element_types": [

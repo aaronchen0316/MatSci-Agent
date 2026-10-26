@@ -25,11 +25,17 @@ import matgl
 model = matgl.load_model("materialyze/TensorNet-PES-MatPES-PBE-2025.2")
 ```
 
+## Stats
+- Layers: 2
+- Units: 128
+- Test_MAE_energies: 32 meV/atom
+- Test_MAE_forces: 119 meV/Å
+- Test_MAE_stresses: 0.626 GPa
 
 ## Metadata
 
 ```json
 {
-  "dataset": "MatPES-r2SCAN-2025.2"
+  "dataset": "MatPES-PBE-2025.2"
 }
 ```

@@ -80,7 +80,7 @@ Install the extra and request `"calculate_matgl": true` in `constraints`, or pas
 uv sync --extra mp --extra matgl
 ```
 
-The default model paths are `models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi` for band gaps and `models/pretrained/TensorNet-PES-MatPES-PBE-2025.2` for optional relaxation. Set `MATSCI_MATGL_MODEL` or `MATSCI_MATGL_RELAX_MODEL` to override them. The lockfile installs MatGL 2.0.6, CPU PyTorch 2.3.1, TorchData 0.8.0, DGL 2.2.1, and PyG 2.7.0 in one `matgl` extra. The MEGNet checkpoint uses DGL; the TensorNet checkpoint uses PyG. Both graph runtimes are required for these exact bundles, even though one extra installs them. Relaxation is currently disabled by default. A single graph backend would require a compatible replacement checkpoint. The container uses Python 3.12 for the DGL wheel.
+The default model paths are `models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1` for band gaps and `models/pretrained/TensorNet-PES-MatPES-PBE-2025.2` for optional relaxation. Both bundles come from the Materialyze model registry and run through PyG. The multifidelity band-gap model uses state 0 (PBE), matching the MP comparison. Set `MATSCI_MATGL_MODEL` or `MATSCI_MATGL_RELAX_MODEL` to override them. The `matgl` extra locks MatGL 4.1.1 and CPU PyTorch 2.13.0; DGL is absent. Relaxation is disabled by default.
 
 ## Current stage and limits
 
@@ -90,7 +90,7 @@ Stability uses Materials Project energy above hull when present and is unknown w
 
 ## Container deployment
 
-The container uses digest-pinned base images, `uv.lock`, and bundled model files. Build the standard MP and LLM image with `docker build -t matsci-agent .`. The optional Linux MatGL image uses `docker build --build-arg WITH_MATGL=1 -t matsci-agent:matgl .`; it takes DGL from the official Torch 2.3 wheel source and CPU-only PyTorch. Supply `MP_API_KEY`, the LLM key, and `MATSCI_API_TOKEN` at runtime. The container requires the API token on discovery routes; clients send it as `X-API-Key`. For example:
+The container uses digest-pinned base images, `uv.lock`, and bundled model files. Build the standard MP and LLM image with `docker build -t matsci-agent .`. The optional Linux MatGL image uses `docker build --build-arg WITH_MATGL=1 -t matsci-agent:matgl .`; it installs CPU-only PyTorch and PyG. Supply `MP_API_KEY`, the LLM key, and `MATSCI_API_TOKEN` at runtime. The container requires the API token on discovery routes; clients send it as `X-API-Key`. For example:
 
 ```bash
 docker run --rm -p 8000:8000 --env-file .env matsci-agent

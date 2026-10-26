@@ -62,7 +62,7 @@ EXAMPLES: dict[str, Example] = {
                 top_k=3,
             ),
         ),
-        prereq_note="Needs matgl/torch/dgl stack plus local model bundles.",
+        prereq_note="Needs the MatGL/PyG stack plus local model bundles.",
     ),
 }
 

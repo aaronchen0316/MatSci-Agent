@@ -100,7 +100,7 @@ def run_example(
         notes.append("HTTP mode uses server-side policy filtering. Remote LLM credentials are required for band-gap screening.")
     if example.name == "matgl_recalc":
         checks = doctor.run_doctor_checks(api_url=None)
-        missing = [check.detail for check in checks if check.name in {"MatGL", "PyTorch", "DGL"} and check.status != "PASS"]
+        missing = [check.detail for check in checks if check.name in {"MatGL", "PyTorch", "PyG"} and check.status != "PASS"]
         if missing:
             notes.append("MatGL example conditional. Local prereqs incomplete.")
             notes.extend(missing)

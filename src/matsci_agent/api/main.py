@@ -76,7 +76,7 @@ def _authorize(x_api_key: str | None = Header(default=None)) -> None:
 @lru_cache(maxsize=1)
 def _matgl_import_failures() -> tuple[str, ...]:
     missing = []
-    for name in ("torch", "torch_geometric", "dgl", "matgl", "ase"):
+    for name in ("torch", "torch_geometric", "matgl", "ase"):
         try:
             importlib.import_module(name)
         except Exception:
@@ -87,7 +87,7 @@ def _matgl_import_failures() -> tuple[str, ...]:
 def _matgl_missing() -> list[str]:
     missing = list(_matgl_import_failures())
     for variable, default in (
-        ("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"),
+        ("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1"),
         ("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"),
     ):
         model_dir = Path(os.getenv(variable, default))

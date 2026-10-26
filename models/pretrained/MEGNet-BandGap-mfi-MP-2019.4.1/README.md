@@ -1,20 +1,44 @@
-# Aim
+---
+library_name: matgl
+tags:
+- matgl
+- materials-science
+- graph-neural-network
+---
+
+## Introduction
 
 This model is a multif-fidelity MEGNet band gap model for 89 elements of the periodic table. It contains the band gap
 for most of materials with 4 fidelities ("0": PBE, "1": GLLB-SC, "2": HSE, "3": SCAN). This is essentially a retrained
 version of the MEGNet band gap model originally implemented in tensorflow.
 
-# Training dataset
 
-MP-2019.4.1: Materials Project band gap as of 2019.4.1.
-- Training set size: 48912
-- Validation set size: 879
+## Usage
 
-# Performance metrics
+```python
+import matgl
 
-MAE of band gap in eV
-- Training: 0.075 eV
-- Validation: 0.314 eV
+model = matgl.load_model("materialyze/MEGNet-BandGap-mfi-MP-2019.4.1")
+```
+
+## Model Details
+
+- Number of parameters: 394,000
+
+## Metrics
+
+| Split | MAE (eV) |
+|---|---:|
+| Train | 0.114 |
+| Validation | 0.317 |
+
+## Metadata
+
+```json
+{
+  "dataset": "MP-Bandgap-mfi-2019.4.1",
+}
+```
 
 # References
 
