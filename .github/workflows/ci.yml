@@ -6,6 +6,12 @@ on:
     branches:
       - main
       - multi-agent
+  schedule:
+    - cron: '0 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -13,5 +19,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --extra dev
-      - run: uv run pytest -q
+      - run: uv sync --locked --extra dev --extra mp
+      - run: uv run --no-sync pytest -q
+
+  container-smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t matsci-agent:smoke .
+      - name: Smoke default image
+        run: |
+          docker run -d --name matsci-smoke -p 127.0.0.1:8000:8000 \
+            -e MP_API_KEY=dummy -e OPENROUTER_API_KEY=dummy -e MATSCI_API_TOKEN=smoke-token \
+            matsci-agent:smoke
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8000/health >/dev/null
+          curl -fsS http://127.0.0.1:8000/ready >/dev/null
+          docker exec matsci-smoke python -c 'import mp_api; from pathlib import Path; assert all(Path(p).is_file() for p in ("models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi/model.pt", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2/model.pt"))'
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"research_goal":"Find AlN semiconductors"}' http://127.0.0.1:8000/discover)" = 401
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'X-API-Key: smoke-token' -d '{"research_goal":"x"}' http://127.0.0.1:8000/discover)" = 422
+          docker rm -f matsci-smoke
+      - name: Require live provider secrets
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          MP_API_KEY: ${{ secrets.MP_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: test -n "$MP_API_KEY" && test -n "$OPENROUTER_API_KEY"
+      - name: Live MP and LLM request
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          MP_API_KEY: ${{ secrets.MP_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MATSCI_API_TOKEN: live-smoke-token
+        run: |
+          docker run -d --name matsci-live -p 127.0.0.1:8000:8000 \
+            -e MP_API_KEY -e OPENROUTER_API_KEY -e MATSCI_API_TOKEN matsci-agent:smoke
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          python3 tests/live_provider_smoke.py
+          docker rm -f matsci-live
+      - name: Build and load MatGL models on Linux
+        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          docker build --build-arg WITH_MATGL=1 -t matsci-agent:matgl .
+          docker run --rm --entrypoint python matsci-agent:matgl -c 'from matsci_agent.api.main import _matgl_missing; assert not _matgl_missing()'
+          docker run --rm --entrypoint python matsci-agent:matgl -c 'import matgl; matgl.set_backend("DGL"); matgl.load_model("models/pretrained/MEGNet-MP-2019.4.1-BandGap-mfi"); from matgl.ext._ase_pyg import Relaxer; Relaxer(potential=matgl.load_model("models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"))'
