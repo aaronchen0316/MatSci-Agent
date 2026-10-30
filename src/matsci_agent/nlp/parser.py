@@ -6,6 +6,7 @@ import os
 import re
 from functools import lru_cache
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPFilters, ParsedDiscoveryIntent
 
@@ -50,8 +51,8 @@ def normalize_llm_provider(provider: str | None) -> str:
 def resolve_llm_model(explicit_model: str | None = None) -> str:
     return (
         explicit_model
-        or os.getenv("MATSCI_NLP_MODEL")
         or os.getenv("MATSCI_LLM_MODEL")
+        or os.getenv("MATSCI_NLP_MODEL")
         or PRIMARY_LLM_MODEL
     )
 
@@ -68,6 +69,10 @@ def resolve_llm_api_key_env() -> str:
     configured = os.getenv("MATSCI_LLM_API_KEY_ENV", "").strip()
     if configured:
         return configured
+    if os.getenv("MATSCI_API_KEY"):
+        return "MATSCI_API_KEY"
+    if urlparse(resolve_llm_base_url()).hostname == "openrouter.ai":
+        return "OPENROUTER_API_KEY_RAG" if os.getenv("OPENROUTER_API_KEY_RAG") else "OPENROUTER_API_KEY"
     if os.getenv("OPENAI_BASE_URL") and os.getenv("OPENAI_API_KEY"):
         return "OPENAI_API_KEY"
     if os.getenv("OPENROUTER_API_KEY_RAG"):

@@ -23,7 +23,7 @@ export OPENROUTER_API_KEY="<your LLM key>"
 export MP_API_KEY="<your Materials Project key>"
 ```
 
-The default LLM endpoint is OpenRouter. Set `MATSCI_LLM_BASE_URL` and `MATSCI_LLM_MODEL` to use another compatible endpoint and model. If your key uses another environment variable, set `MATSCI_LLM_API_KEY_ENV` to its name. The code also accepts `OPENROUTER_API_KEY_RAG`.
+The default LLM endpoint is OpenRouter. Set `MATSCI_LLM_BASE_URL`, `MATSCI_LLM_MODEL`, and `MATSCI_API_KEY` to select an endpoint, model, and key. `MATSCI_LLM_MODEL` takes precedence over the older `MATSCI_NLP_MODEL`. If your key uses another environment variable, set `MATSCI_LLM_API_KEY_ENV` to its name. `MATSCI_API_TOKEN` is separate: it protects the HTTP API.
 
 Live discovery requires `MP_API_KEY` and the `mp` extra. Missing credentials, MP errors, and searches with no matches have separate reason codes. User facing commands and API routes never substitute mock candidates. Keep keys out of source control.
 
