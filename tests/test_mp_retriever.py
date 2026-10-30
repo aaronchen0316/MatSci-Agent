@@ -52,6 +52,15 @@ def test_live_retrieval_keeps_distinct_structures(monkeypatch):
     assert result.provenance.output_summary["source"] == "materials_project"
 
 
+def test_band_gap_has_props_alias_uses_summary_filter(monkeypatch):
+    _fake_mp(monkeypatch)
+    payload = _live_payload()
+    payload.constraints.mp_filters.has_props = ["band_gap", "dielectric"]
+    kwargs = MPRetriever()._build_search_kwargs(payload, limit=4)
+    assert kwargs["has_props"] == ["dielectric"]
+    assert kwargs["band_gap"] == (0.0, 20.0)
+
+
 def test_live_retrieval_caps_pages_and_total_documents(monkeypatch):
     calls = []
     monkeypatch.setenv("MP_API_KEY", "test-key")

@@ -163,6 +163,7 @@ class LLMConstraintParser:
             "user intent. Otherwise use unknown.\n"
             "Use canonical element symbols.\n"
             "Use mp_filters only for real Materials Project summary.search filters.\n"
+            "A known band gap uses mp_filters.band_gap, never has_props; band_gap is not a has_props value.\n"
             "mp_filters keys allowed only: formula, chemsys, material_ids, elements, exclude_elements, "
             "possible_species, has_props, is_metal, is_stable, is_gap_direct, theoretical, deprecated, "
             "has_reconstructed, crystal_system, spacegroup_number, spacegroup_symbol, band_gap, "

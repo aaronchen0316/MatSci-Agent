@@ -289,6 +289,10 @@ class MPRetriever:
     @staticmethod
     def _effective_filters(constraints, goal: str) -> MPFilters:
         filters = constraints.mp_filters.model_copy(deep=True)
+        # Band gap is a summary field, not an MP has_props value.
+        if "band_gap" in filters.has_props:
+            filters.has_props = [prop for prop in filters.has_props if prop != "band_gap"]
+            filters.band_gap = filters.band_gap or FloatRange(min=0.0)
         filters.elements = sorted(set(filters.elements) | set(constraints.required_elements))
         filters.exclude_elements = sorted(set(filters.exclude_elements) | set(constraints.banned_elements))
         if constraints.min_band_gap_ev is not None:
