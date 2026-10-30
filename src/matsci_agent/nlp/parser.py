@@ -69,6 +69,8 @@ def resolve_llm_api_key_env() -> str:
     configured = os.getenv("MATSCI_LLM_API_KEY_ENV", "").strip()
     if configured:
         return configured
+    if os.getenv("MATSCI_LLM_API_KEY"):
+        return "MATSCI_LLM_API_KEY"
     if os.getenv("MATSCI_API_KEY"):
         return "MATSCI_API_KEY"
     if urlparse(resolve_llm_base_url()).hostname == "openrouter.ai":

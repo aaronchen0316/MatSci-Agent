@@ -48,6 +48,7 @@ def test_shared_openai_proxy_settings_override_legacy_openrouter_model(monkeypat
     monkeypatch.delenv("MATSCI_NLP_MODEL", raising=False)
     monkeypatch.delenv("MATSCI_LLM_MODEL", raising=False)
     monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
     monkeypatch.delenv("MATSCI_API_KEY", raising=False)
 
     assert resolve_llm_model() == PRIMARY_LLM_MODEL
@@ -60,6 +61,7 @@ def test_matsci_settings_take_precedence_over_legacy_environment(monkeypatch):
     monkeypatch.setenv("MATSCI_LLM_MODEL", "selected-model")
     monkeypatch.setenv("MATSCI_LLM_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("MATSCI_API_KEY", "selected-key")
+    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "other-key")
     monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
@@ -69,12 +71,22 @@ def test_matsci_settings_take_precedence_over_legacy_environment(monkeypatch):
     assert resolve_llm_api_key_env() == "MATSCI_API_KEY"
 
 
+def test_matsci_llm_api_key_takes_precedence_over_older_key_names(monkeypatch):
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "new-key")
+    monkeypatch.setenv("MATSCI_API_KEY", "old-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "rag-key")
+    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+
+    assert resolve_llm_api_key_env() == "MATSCI_LLM_API_KEY"
+
+
 def test_openrouter_endpoint_uses_openrouter_key_even_with_proxy_environment(monkeypatch):
     monkeypatch.setenv("MATSCI_LLM_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "other-key")
     monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "router-key")
     monkeypatch.delenv("MATSCI_API_KEY", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
     monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
 
     assert resolve_llm_api_key_env() == "OPENROUTER_API_KEY_RAG"
