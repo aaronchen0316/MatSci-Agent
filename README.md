@@ -87,7 +87,7 @@ Install the extra and request `"calculate_matgl": true` in `constraints`, or pas
 uv sync --extra mp --extra matgl
 ```
 
-The default model paths are `models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1` for band gaps and `models/pretrained/TensorNet-PES-MatPES-PBE-2025.2` for optional relaxation. Both bundles come from the Materialyze model registry and run through PyG. The multifidelity band-gap model uses state 0 (PBE), matching the MP comparison. Set `MATSCI_MATGL_MODEL` or `MATSCI_MATGL_RELAX_MODEL` to override them. The `matgl` extra locks MatGL 4.1.1 and CPU PyTorch 2.13.0; DGL is absent. Relaxation is disabled by default.
+The default model paths are `models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1` for band gaps and `models/pretrained/TensorNet-PES-MatPES-r2SCAN-2025.2` for optional relaxation. Both bundles come from the Materialyze model registry and run through PyG. The multifidelity band-gap model uses state 0 (PBE), matching the MP comparison; the relaxation potential is trained on MatPES r2SCAN. Set `MATSCI_MATGL_MODEL` or `MATSCI_MATGL_RELAX_MODEL` to override them. The `matgl` extra locks MatGL 4.1.1 and CPU PyTorch 2.13.0; DGL is absent. Relaxation is disabled by default.
 
 ## Current stage and limits
 

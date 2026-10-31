@@ -37,7 +37,7 @@ def run_doctor_checks(api_url: str | None = None) -> list[DoctorCheck]:
             optional=True,
         ),
         _check_path(
-            Path(os.getenv("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2")),
+            Path(os.getenv("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-r2SCAN-2025.2")),
             "MatGL relax model path",
             optional=True,
         ),

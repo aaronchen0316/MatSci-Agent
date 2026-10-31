@@ -18,7 +18,7 @@ assert torch.version.cuda is None
 
 for path in (
     Path("models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1"),
-    Path("models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"),
+    Path("models/pretrained/TensorNet-PES-MatPES-r2SCAN-2025.2"),
 ):
     model = matgl.load_model(str(path))
     saved = torch.load(path / "state.pt", map_location="cpu", weights_only=True)

@@ -39,7 +39,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:8000/health >/dev/null
           curl -fsS http://127.0.0.1:8000/ready >/dev/null
-          docker exec matsci-smoke python -c 'import mp_api; from pathlib import Path; assert all(Path(p).is_file() for p in ("models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1/model.pt", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2/model.pt"))'
+          docker exec matsci-smoke python -c 'import mp_api; from pathlib import Path; assert all(Path(p).is_file() for p in ("models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1/model.pt", "models/pretrained/TensorNet-PES-MatPES-r2SCAN-2025.2/model.pt"))'
           test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"research_goal":"Find AlN semiconductors"}' http://127.0.0.1:8000/discover)" = 401
           test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'X-API-Key: smoke-token' -d '{"research_goal":"x"}' http://127.0.0.1:8000/discover)" = 422
           docker rm -f matsci-smoke

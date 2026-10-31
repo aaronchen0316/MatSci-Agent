@@ -82,7 +82,7 @@ def _calculate_matgl(features: dict[str, Any], *, relax: bool, max_steps: int) -
             import matgl
             from matgl.ext.ase import Relaxer
 
-            relax_name = os.getenv("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2")
+            relax_name = os.getenv("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-r2SCAN-2025.2")
             result = Relaxer(potential=matgl.load_model(relax_name)).relax(structure, steps=max_steps)
             structure = result["final_structure"]
         if hasattr(model, "predict_structure"):

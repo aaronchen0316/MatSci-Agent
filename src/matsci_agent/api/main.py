@@ -88,7 +88,7 @@ def _matgl_missing() -> list[str]:
     missing = list(_matgl_import_failures())
     for variable, default in (
         ("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1"),
-        ("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-PBE-2025.2"),
+        ("MATSCI_MATGL_RELAX_MODEL", "models/pretrained/TensorNet-PES-MatPES-r2SCAN-2025.2"),
     ):
         model_dir = Path(os.getenv(variable, default))
         if not all((model_dir / name).is_file() for name in ("model.json", "model.pt", "state.pt")):

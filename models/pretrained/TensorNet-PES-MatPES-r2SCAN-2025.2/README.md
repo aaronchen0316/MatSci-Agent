@@ -11,7 +11,7 @@ tags:
 
 ## Introduction
 
-Pre-trained TensorNet foundation potential, i.e., universal machine learning interatomic potential trained on the MatPES PBE 2025.2 dataset.
+Pre-trained TensorNet foundation potential, i.e., universal machine learning interatomic potential trained on the MatPES r2SCAN 2025.2 dataset.
 
 ## Potential
 
@@ -22,20 +22,20 @@ Pre-trained TensorNet foundation potential, i.e., universal machine learning int
 ```python
 import matgl
 
-model = matgl.load_model("materialyze/TensorNet-PES-MatPES-PBE-2025.2")
+model = matgl.load_model("materialyze/TensorNet-PES-MatPES-r2SCAN-2025.2")
 ```
 
 ## Stats
 - Layers: 2
 - Units: 128
 - Test_MAE_energies: 32 meV/atom
-- Test_MAE_forces: 119 meV/Å
-- Test_MAE_stresses: 0.626 GPa
+- Test_MAE_forces: 142 meV/Å
+- Test_MAE_stresses: 0.705 GPa
 
 ## Metadata
 
 ```json
 {
-  "dataset": "MatPES-PBE-2025.2"
+  "dataset": "MatPES-r2SCAN-2025.2"
 }
 ```
