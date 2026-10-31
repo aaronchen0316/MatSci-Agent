@@ -6,13 +6,13 @@ import os
 import re
 from functools import lru_cache
 from typing import Any, Callable
-from urllib.parse import urlparse
 
 from matsci_agent.schemas import DiscoveryConstraints, FloatRange, IntRange, MPFilters, ParsedDiscoveryIntent
 
 logger = logging.getLogger(__name__)
 _DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 PRIMARY_LLM_MODEL = "gpt-5.5"
+LLM_API_KEY_ENV = "MATSCI_LLM_API_KEY"
 _ELEMENT_NAME_TO_SYMBOL = {
     "hydrogen": "H", "helium": "He", "lithium": "Li", "beryllium": "Be", "boron": "B", "carbon": "C",
     "nitrogen": "N", "oxygen": "O", "fluorine": "F", "neon": "Ne", "sodium": "Na", "magnesium": "Mg",
@@ -52,7 +52,6 @@ def resolve_llm_model(explicit_model: str | None = None) -> str:
     return (
         explicit_model
         or os.getenv("MATSCI_LLM_MODEL")
-        or os.getenv("MATSCI_NLP_MODEL")
         or PRIMARY_LLM_MODEL
     )
 
@@ -60,36 +59,12 @@ def resolve_llm_model(explicit_model: str | None = None) -> str:
 def resolve_llm_base_url() -> str:
     return (
         os.getenv("MATSCI_LLM_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
         or _DEFAULT_OPENROUTER_BASE_URL
     )
 
 
-def resolve_llm_api_key_env() -> str:
-    configured = os.getenv("MATSCI_LLM_API_KEY_ENV", "").strip()
-    if configured:
-        return configured
-    if os.getenv("MATSCI_LLM_API_KEY"):
-        return "MATSCI_LLM_API_KEY"
-    if os.getenv("MATSCI_API_KEY"):
-        return "MATSCI_API_KEY"
-    if urlparse(resolve_llm_base_url()).hostname == "openrouter.ai":
-        return "OPENROUTER_API_KEY_RAG" if os.getenv("OPENROUTER_API_KEY_RAG") else "OPENROUTER_API_KEY"
-    if os.getenv("OPENAI_BASE_URL") and os.getenv("OPENAI_API_KEY"):
-        return "OPENAI_API_KEY"
-    if os.getenv("OPENROUTER_API_KEY_RAG"):
-        return "OPENROUTER_API_KEY_RAG"
-    return "OPENROUTER_API_KEY"
-
-
 def resolve_llm_api_key() -> tuple[str | None, str]:
-    env_name = resolve_llm_api_key_env()
-    api_key = os.getenv(env_name)
-    if api_key:
-        return api_key, env_name
-    if env_name != "OPENROUTER_API_KEY" and os.getenv("OPENROUTER_API_KEY"):
-        return os.getenv("OPENROUTER_API_KEY"), "OPENROUTER_API_KEY"
-    return None, env_name
+    return os.getenv(LLM_API_KEY_ENV), LLM_API_KEY_ENV
 
 
 def is_unavailable_model_error(exc: Exception | str) -> bool:

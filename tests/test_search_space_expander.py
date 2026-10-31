@@ -129,9 +129,9 @@ def test_expander_uses_shared_primary_model_and_blocks_when_unavailable(monkeypa
         def close(self) -> None:
             pass
 
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "test-key")
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-key")
     monkeypatch.setenv("MATSCI_LLM_BASE_URL", "https://proxy.example/v1")
-    monkeypatch.delenv("MATSCI_NLP_MODEL", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_MODEL", raising=False)
     monkeypatch.setattr(openai, "OpenAI", FakeClient)
 
     agent = SearchSpaceExpansionAgent()
@@ -165,7 +165,7 @@ def test_expander_retries_transient_timeout_with_backoff(monkeypatch):
         def close(self) -> None:
             pass
 
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "test-key")
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-key")
     monkeypatch.setattr(openai, "OpenAI", FakeClient)
     monkeypatch.setattr(search_space_expander.time, "sleep", sleeps.append)
 
@@ -194,7 +194,7 @@ def test_expander_does_not_retry_invalid_json_response(monkeypatch):
         def close(self) -> None:
             pass
 
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "test-key")
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-key")
     monkeypatch.setattr(openai, "OpenAI", FakeClient)
 
     agent = SearchSpaceExpansionAgent()

@@ -31,7 +31,7 @@ jobs:
       - name: Smoke default image
         run: |
           docker run -d --name matsci-smoke -p 127.0.0.1:8000:8000 \
-            -e MP_API_KEY=dummy -e OPENROUTER_API_KEY=dummy -e MATSCI_API_TOKEN=smoke-token \
+            -e MP_API_KEY=dummy -e MATSCI_LLM_API_KEY=dummy -e MATSCI_API_TOKEN=smoke-token \
             matsci-agent:smoke
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/ready >/dev/null; then break; fi
@@ -43,21 +43,26 @@ jobs:
           test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"research_goal":"Find AlN semiconductors"}' http://127.0.0.1:8000/discover)" = 401
           test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'X-API-Key: smoke-token' -d '{"research_goal":"x"}' http://127.0.0.1:8000/discover)" = 422
           docker rm -f matsci-smoke
-      - name: Require live provider secrets
+      - name: Require live provider configuration
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           MP_API_KEY: ${{ secrets.MP_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: test -n "$MP_API_KEY" && test -n "$OPENROUTER_API_KEY"
+          MATSCI_LLM_API_KEY: ${{ secrets.MATSCI_LLM_API_KEY }}
+          MATSCI_LLM_BASE_URL: ${{ vars.MATSCI_LLM_BASE_URL }}
+          MATSCI_LLM_MODEL: ${{ vars.MATSCI_LLM_MODEL }}
+        run: test -n "$MP_API_KEY" && test -n "$MATSCI_LLM_API_KEY" && test -n "$MATSCI_LLM_BASE_URL" && test -n "$MATSCI_LLM_MODEL"
       - name: Live MP and LLM request
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           MP_API_KEY: ${{ secrets.MP_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MATSCI_LLM_API_KEY: ${{ secrets.MATSCI_LLM_API_KEY }}
+          MATSCI_LLM_BASE_URL: ${{ vars.MATSCI_LLM_BASE_URL }}
+          MATSCI_LLM_MODEL: ${{ vars.MATSCI_LLM_MODEL }}
           MATSCI_API_TOKEN: live-smoke-token
         run: |
           docker run -d --name matsci-live -p 127.0.0.1:8000:8000 \
-            -e MP_API_KEY -e OPENROUTER_API_KEY -e MATSCI_API_TOKEN matsci-agent:smoke
+            -e MP_API_KEY -e MATSCI_LLM_API_KEY -e MATSCI_LLM_BASE_URL \
+            -e MATSCI_LLM_MODEL -e MATSCI_API_TOKEN matsci-agent:smoke
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/ready >/dev/null; then break; fi
             sleep 2

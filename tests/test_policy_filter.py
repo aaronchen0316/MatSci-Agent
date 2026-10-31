@@ -232,9 +232,7 @@ def test_policy_filter_caps_reason_count():
 
 
 def test_policy_filter_without_credentials_fails_closed(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY_RAG", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
     tool = PolicyFilter()
     payload = PolicyFilterInput(
         candidates=[
@@ -251,9 +249,7 @@ def test_policy_filter_without_credentials_fails_closed(monkeypatch):
 
 
 def test_policy_filter_remote_failure_fails_closed(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "test-key")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-key")
     tool = PolicyFilter(provider="openrouter")
     payload = PolicyFilterInput(
         candidates=[
@@ -295,7 +291,7 @@ def test_policy_filter_retries_transient_timeout_with_backoff(monkeypatch):
             choices=[SimpleNamespace(message=SimpleNamespace(content='{"decisions":[{"material_id":"c1","keep":true,"reasons":[]}]}'))]
         )
 
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "test-key")
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-key")
     monkeypatch.setattr(tool, "_request_openrouter_completion", request)
     monkeypatch.setattr(policy_filter_module.time, "sleep", sleeps.append)
 

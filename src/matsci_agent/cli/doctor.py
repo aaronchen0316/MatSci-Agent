@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from matsci_agent.cli.transport import probe_health
-from matsci_agent.nlp.parser import resolve_llm_api_key_env
+from matsci_agent.nlp.parser import LLM_API_KEY_ENV
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ def run_doctor_checks(api_url: str | None = None) -> list[DoctorCheck]:
         _check_package("torch", "PyTorch", optional=True),
         _check_package("torch_geometric", "PyG", optional=True),
         _check_env("MP_API_KEY", "Materials Project live retrieval"),
-        _check_env(resolve_llm_api_key_env(), "OpenRouter parsing / policy filter", optional=False),
+        _check_env(LLM_API_KEY_ENV, "LLM parsing / policy filter", optional=False),
         _check_path(
             Path(os.getenv("MATSCI_MATGL_MODEL", "models/pretrained/MEGNet-BandGap-mfi-MP-2019.4.1")),
             "MatGL band-gap model path",

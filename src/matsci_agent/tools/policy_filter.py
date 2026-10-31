@@ -174,7 +174,7 @@ class PolicyFilter:
     def _call_openrouter(self, payload: PolicyFilterInput) -> dict[str, Any]:
         api_key, api_key_env = resolve_llm_api_key()
         if not api_key:
-            raise PolicyFilterError("policy_filter_llm_request_failed", f"OpenRouter credentials missing: {api_key_env}.")
+            raise PolicyFilterError("policy_filter_llm_request_failed", f"LLM credentials missing: {api_key_env}.")
         try:
             from openai import OpenAI
         except Exception as exc:

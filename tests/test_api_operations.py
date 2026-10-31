@@ -78,7 +78,7 @@ def test_matgl_requires_operator_and_caller_opt_in(monkeypatch):
 
 def test_readiness_checks_optional_matgl_runtime(monkeypatch):
     monkeypatch.setenv("MP_API_KEY", "test-mp")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-llm")
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-llm")
     monkeypatch.setenv("MATSCI_API_TOKEN", "test-api")
     monkeypatch.setenv("MATSCI_REQUIRE_API_TOKEN", "1")
     monkeypatch.setenv("MATSCI_ENABLE_MATGL", "1")

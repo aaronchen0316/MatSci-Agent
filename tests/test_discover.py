@@ -325,9 +325,7 @@ def test_workflow_can_still_skip_policy_filter_when_explicitly_disabled():
 
 
 def test_workflow_defaults_to_policy_filter_fails_closed_without_llm_credentials(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY_RAG", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
     wf = DiscoveryWorkflow(
         retriever=FixtureRetriever(),
         intent_agent=ChemistryIntentAgent(parser_fn=lambda _goal: DiscoveryConstraints()),

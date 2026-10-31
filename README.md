@@ -19,13 +19,20 @@ From the repository root, with `uv` installed:
 uv python install 3.12
 uv venv --python 3.12
 uv sync --extra mp
-export OPENROUTER_API_KEY="<your LLM key>"
-export MP_API_KEY="<your Materials Project key>"
 ```
 
-The default LLM endpoint is OpenRouter. Set `MATSCI_LLM_BASE_URL`, `MATSCI_LLM_MODEL`, and `MATSCI_LLM_API_KEY` to select an endpoint, model, and key. `MATSCI_LLM_MODEL` takes precedence over the older `MATSCI_NLP_MODEL`. `MATSCI_API_KEY` remains a compatibility alias; `MATSCI_LLM_API_KEY` wins when both are set. If your key uses another environment variable, set `MATSCI_LLM_API_KEY_ENV` to its name. `MATSCI_API_TOKEN` is separate: it protects the HTTP API.
+Set these variables in the terminal that starts MatSci. For persistent zsh setup, add the same lines to `~/.zshrc` and run `source ~/.zshrc`. Use your provider's OpenAI-compatible `/v1` URL and model ID:
 
-Live discovery requires `MP_API_KEY` and the `mp` extra. Missing credentials, MP errors, and searches with no matches have separate reason codes. User facing commands and API routes never substitute mock candidates. Keep keys out of source control.
+```bash
+export MATSCI_LLM_BASE_URL="https://openrouter.ai/api/v1"
+export MATSCI_LLM_MODEL="<your-provider-model-id>"
+export MATSCI_LLM_API_KEY="<your-provider-key>"
+export MP_API_KEY="<your-Materials-Project-key>"
+```
+
+Only `MATSCI_LLM_API_KEY` supplies the LLM credential. `MATSCI_API_TOKEN` is separate and protects the HTTP API. Keep keys out of source control. A container or service needs these variables passed to its own process; it does not read your shell profile.
+
+Live discovery requires `MP_API_KEY` and the `mp` extra. Missing credentials, MP errors, and searches with no matches have separate reason codes. User facing commands and API routes never substitute mock candidates.
 
 ## Use the CLI
 
@@ -98,4 +105,4 @@ docker run --rm -p 8000:8000 --env-file .env matsci-agent
 
 Use one worker. To allow MatGL requests in the MatGL image, set `MATSCI_ENABLE_MATGL=1` at runtime; callers must also set `constraints.calculate_matgl=true`. `/health` checks the process; `/ready` checks credentials, the MP client, and enabled MatGL imports and local files without contacting providers or loading models on every probe. The API accepts at most two concurrent discovery requests and returns `429` with `Retry-After` when full. MP retrieval screens at most 120 distinct documents across at most three one-page searches. Keep a per-client rate limit at the front server.
 
-Every response has `X-Request-ID`. One JSON log line per request records that ID, route, duration, HTTP and workflow status, reason code, and a failure flag. It omits request text and credentials; count `failure=true` events for operational failure metrics. CI builds and smokes the standard image on every change. A weekly or manual run uses real `MP_API_KEY` and `OPENROUTER_API_KEY` GitHub secrets for one end-to-end request and loads both models in the MatGL image. A Linux container build has not been run on this local machine because Docker is unavailable here.
+Every response has `X-Request-ID`. One JSON log line per request records that ID, route, duration, HTTP and workflow status, reason code, and a failure flag. It omits request text and credentials; count `failure=true` events for operational failure metrics. CI builds and smokes the standard image on every change. A weekly or manual run needs `MP_API_KEY` and `MATSCI_LLM_API_KEY` GitHub secrets plus `MATSCI_LLM_BASE_URL` and `MATSCI_LLM_MODEL` repository variables. It makes one end-to-end request and loads both models in the MatGL image. A Linux container build has not been run on this local machine because Docker is unavailable here.

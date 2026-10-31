@@ -2,7 +2,7 @@ from matsci_agent.nlp.parser import (
     PRIMARY_LLM_MODEL,
     LLMConstraintParser,
     merge_constraints,
-    resolve_llm_api_key_env,
+    resolve_llm_api_key,
     resolve_llm_base_url,
     resolve_llm_model,
 )
@@ -40,56 +40,24 @@ def test_omitted_hull_threshold_remains_unset_through_constraint_merge():
     assert merged.max_energy_above_hull is None
 
 
-def test_shared_openai_proxy_settings_override_legacy_openrouter_model(monkeypatch):
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "proxy-key")
-    monkeypatch.setenv("MATSCI_OPENROUTER_MODEL", "legacy-model")
+def test_llm_settings_use_defaults_when_unset(monkeypatch):
     monkeypatch.delenv("MATSCI_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("MATSCI_NLP_MODEL", raising=False)
     monkeypatch.delenv("MATSCI_LLM_MODEL", raising=False)
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
     monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("MATSCI_API_KEY", raising=False)
 
     assert resolve_llm_model() == PRIMARY_LLM_MODEL
-    assert resolve_llm_base_url() == "https://proxy.example/v1"
-    assert resolve_llm_api_key_env() == "OPENAI_API_KEY"
+    assert resolve_llm_base_url() == "https://openrouter.ai/api/v1"
+    assert resolve_llm_api_key() == (None, "MATSCI_LLM_API_KEY")
 
 
-def test_matsci_settings_take_precedence_over_legacy_environment(monkeypatch):
-    monkeypatch.setenv("MATSCI_NLP_MODEL", "legacy-model")
+def test_llm_settings_use_only_matsci_variables(monkeypatch):
     monkeypatch.setenv("MATSCI_LLM_MODEL", "selected-model")
-    monkeypatch.setenv("MATSCI_LLM_BASE_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("MATSCI_API_KEY", "selected-key")
-    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "other-key")
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
+    monkeypatch.setenv("MATSCI_LLM_BASE_URL", "https://proxy.example/v1")
+    monkeypatch.setenv("MATSCI_LLM_API_KEY", "test-key")
 
     assert resolve_llm_model() == "selected-model"
-    assert resolve_llm_base_url() == "https://openrouter.ai/api/v1"
-    assert resolve_llm_api_key_env() == "MATSCI_API_KEY"
-
-
-def test_matsci_llm_api_key_takes_precedence_over_older_key_names(monkeypatch):
-    monkeypatch.setenv("MATSCI_LLM_API_KEY", "new-key")
-    monkeypatch.setenv("MATSCI_API_KEY", "old-key")
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "rag-key")
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
-
-    assert resolve_llm_api_key_env() == "MATSCI_LLM_API_KEY"
-
-
-def test_openrouter_endpoint_uses_openrouter_key_even_with_proxy_environment(monkeypatch):
-    monkeypatch.setenv("MATSCI_LLM_BASE_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "other-key")
-    monkeypatch.setenv("OPENROUTER_API_KEY_RAG", "router-key")
-    monkeypatch.delenv("MATSCI_API_KEY", raising=False)
-    monkeypatch.delenv("MATSCI_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("MATSCI_LLM_API_KEY_ENV", raising=False)
-
-    assert resolve_llm_api_key_env() == "OPENROUTER_API_KEY_RAG"
+    assert resolve_llm_base_url() == "https://proxy.example/v1"
+    assert resolve_llm_api_key() == ("test-key", "MATSCI_LLM_API_KEY")
 
 
 def test_merge_constraints_preserves_explicit_user_values():
